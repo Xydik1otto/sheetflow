@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>SheetFlow — ваш Excel, але з порядком</title>
+<style>
+:root { --accent:#2563eb; --danger:#dc2626; --bg:#f8fafc; --line:#e2e8f0; }
+* { box-sizing:border-box; }
+body { font-family:system-ui,Segoe UI,Arial,sans-serif; margin:0; background:var(--bg); color:#0f172a; }
+header { background:#fff; border-bottom:1px solid var(--line); padding:12px 24px; display:flex; gap:24px; align-items:center; }
+header h1 { font-size:18px; margin:0; color:var(--accent); }
+main { max-width:1100px; margin:24px auto; padding:0 16px; }
+.card { background:#fff; border:1px solid var(--line); border-radius:8px; padding:16px 20px; margin-bottom:20px; }
+button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:8px 14px; cursor:pointer; }
+button.secondary { background:#64748b; }
+select, input { padding:6px 8px; border:1px solid var(--line); border-radius:6px; }
+table { width:100%; border-collapse:collapse; font-size:14px; }
+th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+tr.overdue td { background:#fee2e2; }
+.badge-overdue { color:var(--danger); font-weight:600; }
+.muted { color:#64748b; font-size:12px; }
+.hidden { display:none; }
+pre { background:#0f172a; color:#e2e8f0; padding:10px; border-radius:6px; overflow:auto; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SheetFlow</h1>
+  <span class="muted">Імпортуйте свій процес, а не міняйте його</span>
+</header>
+<main>
+  <div class="card" id="loginCard">
+    <h3>Вхід</h3>
+    <input id="u" placeholder="Логін (admin)"> <input id="p" type="password" placeholder="Пароль">
+    <button onclick="login()">Увійти</button>
+    <span class="muted">Перший користувач — admin/admin123 (змініть пароль у БД)</span>
+  </div>
+
+  <div class="card hidden" id="step1">
+    <h3>1. Завантажте ваш .xlsx</h3>
+    <input type="file" id="file" accept=".xlsx">
+    <button onclick="upload()">Аналізувати</button>
+  </div>
+
+  <div class="card hidden" id="step2">
+    <h3>2. Назвіть колекцію та змапте колонки</h3>
+    <input id="collName" placeholder="Назва, напр. Замовлення">
+    <table id="mapTable"><thead><tr><th>Колонка з файлу</th><th>Приклад</th><th>Сутність</th></tr></thead><tbody></tbody></table>
+    <button onclick="doMap()">Створити колекцію</button>
+    <div id="mapResult"></div>
+  </div>
+
+  <div class="card hidden" id="listCard">
+    <h3>Колекції</h3>
+    <table id="collTable"><thead><tr><th>#</th><th>Назва</th><th>Файл</th><th>Рядків</th><th>Створено</th><th></th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card hidden" id="rowsCard">
+    <h3 id="rowsTitle">Рядки</h3>
+    <select id="fStatus"><option value="">— статус —</option></select>
+    <select id="fOverdue"><option value="">— дедлайн —</option><option value="1">Тільки прострочені</option></select>
+    <input id="fQ" placeholder="Пошук...">
+    <button class="secondary" onclick="loadRows()">Фільтрувати</button>
+    <button class="secondary" onclick="exportCsv()">Експорт CSV</button>
+    <table id="rowsTable"><thead><tr><th>Item</th><th>Qty</th><th>Статус</th><th>Виконавець</th><th>Дедлайн</th><th>Сума</th></tr></thead><tbody></tbody></table>
+    <h4>Журнал змін (audit)</h4>
+    <div id="auditBox" class="muted"></div>
+  </div>
+</main>
+<script>
+let token = localStorage.getItem('token') || '';
+let uploadId = null, columns = [], currentColl = null;
+const ENTITIES = ['', 'item', 'quantity', 'status', 'assignee', 'due_date', 'amount'];
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) } });
+  if (r.status === 401) { document.getElementById('loginCard').classList.remove('hidden'); throw new Error('login required'); }
+  if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+  return r.json();
+}
+
+async function login() {
+  const r = await api('/api/login', { method: 'POST', body: JSON.stringify({ username: u.value, password: p.value }) });
+  token = r.token; localStorage.setItem('token', token);
+  document.getElementById('loginCard').classList.add('hidden');
+  boot();
+}
+
+async function boot() {
+  document.getElementById('step1').classList.remove('hidden');
+  await loadCollections();
+}
+
+async function upload() {
+  const fd = new FormData(); fd.append('file', file.files[0]);
+  const r = await fetch('/api/import/upload', { method: 'POST', body: fd, headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) { alert((await r.json()).detail); return; }
+  const d = await r.json();
+  uploadId = d.upload_id; columns = d.columns;
+  const tb = document.querySelector('#mapTable tbody'); tb.innerHTML = '';
+  columns.forEach(col => {
+    const sample = d.preview[0] ? (d.preview[0][col] ?? '') : '';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${col}</td><td class="muted">${sample}</td>` +
+      `<td><select data-col="${col}">${ENTITIES.map(e => `<option>${e}</option>`).join('')}</select></td>`;
+    tb.appendChild(tr);
+  });
+  document.getElementById('step2').classList.remove('hidden');
+}
+
+async function doMap() {
+  const mapping = {};
+  document.querySelectorAll('#mapTable select').forEach(s => { if (s.value) mapping[s.dataset.col] = s.value; });
+  const d = await api('/api/import/map', { method: 'POST', body: JSON.stringify({ upload_id: uploadId, name: collName.value || 'Без назви', mapping }) });
+  document.getElementById('mapResult').innerHTML = `<pre>${JSON.stringify({ imported: d.imported, errors: d.error_count }, null, 2)}</pre>`;
+  await loadCollections();
+}
+
+async function loadCollections() {
+  const cols = await api('/api/collections');
+  const tb = document.querySelector('#collTable tbody'); tb.innerHTML = '';
+  cols.forEach(c => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${c.id}</td><td>${c.name}</td><td class="muted">${c.source_file}</td><td>${c.row_count}</td><td class="muted">${c.created_at}</td>` +
+      `<td><button onclick="openColl(${c.id},'${c.name.replace(/'/g, "\\'")}')">Відкрити</button></td>`;
+    tb.appendChild(tr);
+  });
+  if (cols.length) document.getElementById('listCard').classList.remove('hidden');
+}
+
+async function openColl(id, name) {
+  currentColl = id;
+  document.getElementById('rowsTitle').textContent = name;
+  document.getElementById('rowsCard').classList.remove('hidden');
+  fStatus.innerHTML = '<option value="">— статус —</option>' + ['new','in_progress','done','blocked'].map(s => `<option>${s}</option>`).join('');
+  await loadRows();
+}
+
+async function loadRows() {
+  const p = new URLSearchParams();
+  if (fStatus.value) p.set('status', fStatus.value);
+  if (fOverdue.value) p.set('overdue', '1');
+  if (fQ.value) p.set('q', fQ.value);
+  const rows = await api(`/api/collections/${currentColl}/rows?` + p);
+  const tb = document.querySelector('#rowsTable tbody'); tb.innerHTML = '';
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    if (r.overdue) tr.className = 'overdue';
+    const dd = r.due_date ? (r.overdue ? `<span class="badge-overdue">${r.due_date} ⚠ прострочено</span>` : r.due_date) : '';
+    tr.innerHTML = `<td>${r.item ?? ''}</td><td>${r.quantity ?? ''}</td>` +
+      `<td><select onchange="setStatus(${r.id}, this.value)">${['','new','in_progress','done','blocked'].map(s => `<option ${s === r.status ? 'selected' : ''}>${s}</option>`).join('')}</select></td>` +
+      `<td>${r.assignee ?? ''}</td><td>${dd}</td><td>${r.amount ?? ''}</td>`;
+    tb.appendChild(tr);
+  });
+  const audit = await api(`/api/collections/${currentColl}/audit`);
+  document.getElementById('auditBox').textContent =
+    audit.slice(0, 20).map(a => `${a.ts} — ${a.user} — ${a.action}${a.field ? ' [' + a.field + ']: ' + (a.old_value ?? '∅') + ' → ' + (a.new_value ?? '∅') : ' — ' + (a.new_value ?? '')}`).join('\n');
+}
+
+async function setStatus(id, status) {
+  await api('/api/rows/' + id, { method: 'PATCH', body: JSON.stringify({ field: 'status', value: status }) });
+  await loadRows();
+}
+
+function exportCsv() { window.open(`/api/collections/${currentColl}/export.csv`, '_blank'); }
+
+if (token) boot();
+</script>
+</body>
+</html>
