@@ -44,6 +44,7 @@ pre { background:#0f172a; color:#e2e8f0; padding:10px; border-radius:6px; overfl
 
   <div class="card hidden" id="step2">
     <h3>2. Назвіть колекцію та змапте колонки</h3>
+    <label>Рядок-шапка: <select id="hdrRow" onchange="upload(this.value)"></select></label>
     <input id="collName" placeholder="Назва, напр. Замовлення">
     <table id="mapTable"><thead><tr><th>Колонка з файлу</th><th>Приклад</th><th>Сутність</th></tr></thead><tbody></tbody></table>
     <button onclick="doMap()">Створити колекцію</button>
@@ -91,12 +92,22 @@ async function boot() {
   await loadCollections();
 }
 
-async function upload() {
-  const fd = new FormData(); fd.append('file', file.files[0]);
+let lastFile = null;
+
+async function upload(manualHeader) {
+  const f = lastFile || file.files[0];
+  if (!f) return;
+  lastFile = f;
+  const fd = new FormData(); fd.append('file', f);
+  if (manualHeader) fd.append('header_row', manualHeader);
   const r = await fetch('/api/import/upload', { method: 'POST', body: fd, headers: { Authorization: 'Bearer ' + token } });
   if (!r.ok) { alert((await r.json()).detail); return; }
   const d = await r.json();
   uploadId = d.upload_id; columns = d.columns;
+  const hdr = document.getElementById('hdrRow');
+  const maxRow = Math.min(12, d.header_row + 10);
+  hdr.innerHTML = `<option value="">Авто (рядок ${d.header_row})</option>` +
+    Array.from({ length: maxRow }, (_, i) => `<option value="${i + 1}" ${i + 1 === d.header_row && manualHeader ? 'selected' : ''}>Рядок ${i + 1}</option>`).join('');
   const suggested = d.suggested_mapping || {};
   const tb = document.querySelector('#mapTable tbody'); tb.innerHTML = '';
   columns.forEach(col => {
@@ -113,7 +124,8 @@ async function upload() {
 async function doMap() {
   const mapping = {};
   document.querySelectorAll('#mapTable select').forEach(s => { if (s.value) mapping[s.dataset.col] = s.value; });
-  const d = await api('/api/import/map', { method: 'POST', body: JSON.stringify({ upload_id: uploadId, name: collName.value || 'Без назви', mapping }) });
+  const hdrVal = document.getElementById('hdrRow').value;
+  const d = await api('/api/import/map', { method: 'POST', body: JSON.stringify({ upload_id: uploadId, name: collName.value || 'Без назви', mapping, header_row: hdrVal ? Number(hdrVal) : null }) });
   document.getElementById('mapResult').innerHTML = `<pre>${JSON.stringify({ imported: d.imported, errors: d.error_count }, null, 2)}</pre>`;
   await loadCollections();
 }

@@ -18,7 +18,7 @@ import os
 import uuid
 from datetime import date, timedelta
 
-from fastapi import Depends, FastAPI, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
@@ -78,10 +78,12 @@ def me(user: str = Depends(current_user)):
 
 
 @app.post("/api/import/upload")
-async def upload(file: UploadFile, user: str = Depends(current_user)):
+async def upload(file: UploadFile, header_row: int | None = Form(None),
+                 user: str = Depends(current_user)):
+    """Parse the xlsx. header_row: 1-based manual header selection; omitted = auto-detect."""
     data = await file.read()
     try:
-        parsed = importer.parse_sheet(data)
+        parsed = importer.parse_sheet(data, header_row=header_row)
     except Exception as exc:  # openpyxl raises a zoo of exception types
         raise HTTPException(400, f"Cannot parse file: {exc}")
     upload_id = uuid.uuid4().hex
@@ -92,6 +94,7 @@ async def upload(file: UploadFile, user: str = Depends(current_user)):
         "preview": parsed.preview,
         "total_rows": parsed.total_rows,
         "entity_fields": importer.ENTITY_FIELDS,
+        "header_row": parsed.header_row + 1,  # echo back, 1-based as in the UI
         # Pre-filled mapping proposal — user sees it and can correct any column.
         "suggested_mapping": importer.suggest_mapping(parsed.columns),
     }
@@ -101,6 +104,7 @@ class MapIn(BaseModel):
     upload_id: str
     name: str
     mapping: dict[str, str]
+    header_row: int | None = None  # must match the header_row used at upload
 
 
 @app.post("/api/import/map")
@@ -119,7 +123,7 @@ def map_columns(body: MapIn, conn=Depends(db.db), user: str = Depends(current_us
         (body.name, filename, importer.mapping_to_json(body.mapping), user, db.now_iso()),
     )
     collection_id = cur.lastrowid
-    typed_rows, errors = importer.build_rows(data, body.mapping)
+    typed_rows, errors = importer.build_rows(data, body.mapping, header_row=body.header_row)
     for r in typed_rows:
         conn.execute(
             "INSERT INTO rows (collection_id, item, quantity, status, assignee, due_date, amount, "

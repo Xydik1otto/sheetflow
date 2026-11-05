@@ -143,6 +143,7 @@ class SheetParse:
     columns: list[str]
     preview: list[dict]  # first rows as {column: value}
     total_rows: int
+    header_row: int  # 0-based index of the row used as the header
 
 
 @dataclass
@@ -161,26 +162,56 @@ class ImportReport:
     errors: list[RowError] = field(default_factory=list)
 
 
-def parse_sheet(data: bytes) -> SheetParse:
-    """Parse the first worksheet of an .xlsx into columns + preview rows."""
+def iter_rows(data: bytes):
+    """Open the first worksheet and yield its rows as value tuples."""
     wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     ws = wb.active
-    rows_iter = ws.iter_rows(values_only=True)
-    try:
-        header = next(rows_iter)
-    except StopIteration:
+    yield from ws.iter_rows(values_only=True)
+    wb.close()
+
+
+def detect_header_row(data: bytes) -> int:
+    """0-based index of the first non-empty row whose non-empty cells are
+    mostly text (>50%, at least 2 cells) — real sheets often start with a
+    merged title cell or a blank band; a lone text cell is a title, not a header."""
+    for i, row in enumerate(iter_rows(data)):
+        cells = [c for c in row if not _is_blank(c)]
+        if len(cells) < 2:
+            continue
+        text_cells = sum(1 for c in cells if isinstance(c, str))
+        if text_cells / len(cells) > 0.5:
+            return i
+    return 0
+
+
+def resolve_header_row(data: bytes, header_row: int | None = None) -> int:
+    """header_row given by the user is 1-based as shown in the UI; None = auto-detect."""
+    if header_row is not None:
+        return header_row - 1  # UI is 1-based
+    return detect_header_row(data)
+
+
+def parse_sheet(data: bytes, header_row: int | None = None) -> SheetParse:
+    """Parse the first worksheet of an .xlsx into columns + preview rows.
+
+    header_row: 1-based row to use as the header (manual selection); None
+    auto-detects the first mostly-text non-empty row.
+    """
+    hr = resolve_header_row(data, header_row)
+    all_rows = list(iter_rows(data))
+    if not all_rows:
         raise ValueError("The file is empty (no header row found)")
+    header = all_rows[hr] if hr < len(all_rows) else all_rows[0]
     columns = [str(c).strip() if c is not None else f"column_{i}" for i, c in enumerate(header)]
     columns = [c if c else f"column_{i}" for i, c in enumerate(columns)]
     preview, total = [], 0
-    for row in rows_iter:
+    for row in all_rows[hr + 1:]:
         total += 1
         if len(preview) < 10:
             preview.append({columns[i]: row[i] if i < len(row) else None for i in range(len(columns))})
-    wb.close()
     if not columns:
         raise ValueError("No columns detected in the file")
-    return SheetParse(columns=columns, preview=preview, total_rows=total)
+    return SheetParse(columns=columns, preview=preview, total_rows=total, header_row=hr)
 
 
 def validate_mapping(columns: list[str], mapping: dict[str, str]) -> list[str]:
@@ -202,20 +233,23 @@ def validate_mapping(columns: list[str], mapping: dict[str, str]) -> list[str]:
     return problems
 
 
-def build_rows(data: bytes, mapping: dict[str, str]) -> tuple[list[dict], list[RowError]]:
+def build_rows(data: bytes, mapping: dict[str, str],
+               header_row: int | None = None) -> tuple[list[dict], list[RowError]]:
     """Apply the mapping to the whole sheet. Returns (typed_rows, errors).
 
-    Rows are always returned with all 6 entity keys (None where absent/invalid);
-    rows whose 'item' (identity) could not be parsed are skipped and reported.
+    header_row: 1-based row to use as the header (manual selection); None
+    auto-detects, mirroring parse_sheet. Rows are always returned with all 6
+    entity keys (None where absent/invalid); rows whose 'item' (identity)
+    could not be parsed are skipped and reported.
     """
-    wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-    ws = wb.active
-    rows_iter = ws.iter_rows(values_only=True)
-    header = [str(c).strip() if c is not None else "" for c in next(rows_iter)]
+    all_rows = list(iter_rows(data))
+    hr = resolve_header_row(data, header_row)
+    header_row_values = all_rows[hr] if hr < len(all_rows) else all_rows[0]
+    header = [str(c).strip() if c is not None else "" for c in header_row_values]
     col_index = {name: i for i, name in enumerate(header)}
     out, errors = [], []
     n = 0
-    for raw in rows_iter:
+    for raw in all_rows[hr + 1:]:
         n += 1
 
         def cell(col):
@@ -237,7 +271,6 @@ def build_rows(data: bytes, mapping: dict[str, str]) -> tuple[list[dict], list[R
         if row_errors:
             errors.extend(row_errors)
         out.append(typed)
-    wb.close()
     return out, errors
 
 
