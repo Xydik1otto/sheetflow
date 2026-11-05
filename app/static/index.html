@@ -113,6 +113,10 @@ td select { min-width:90px; }
       <button id="vTable" class="active" onclick="setView('table')" data-i18n="view_table">Таблиця</button>
       <button id="vKanban" onclick="setView('kanban')" data-i18n="view_kanban">Канбан</button>
     </span>
+    <span id="reimportBox" class="hidden" style="margin-left:12px">
+      <input type="file" id="reimportFile" accept=".xlsx,.csv" aria-label="Файл для повторного імпорту">
+      <button class="secondary" onclick="reimportUpsert()" data-i18n="reimport_btn">↻ Повторний імпорт (upsert)</button>
+    </span>
     <div id="kanban"></div>
     <div id="bulkBar" class="hidden" style="margin:8px 0">
       <span data-i18n="selected_n">Вибрано:</span> <b id="bulkCount" role="status" aria-live="polite">0</b>
@@ -281,6 +285,7 @@ async function openColl(id, name) {
   currentColl = id;
   document.getElementById('rowsTitle').textContent = name;
   document.getElementById('rowsCard').classList.remove('hidden');
+  document.getElementById('reimportBox').classList.toggle('hidden', window.__role !== 'admin');
   fStatus.innerHTML = `<option value="">${t('opt_status')}</option>` + ['new','in_progress','done','blocked'].map(s => `<option>${s}</option>`).join('');
   document.getElementById('bulkStatus').innerHTML = `<option value="">${t('opt_new_status')}</option>` + ['new','in_progress','done','blocked'].map(s => `<option>${s}</option>`).join('');
   fOverdue.value = ''; fQ.value = '';
@@ -493,6 +498,21 @@ document.getElementById('rowsTable').addEventListener('keydown', e => {
     e.target.blur();
   }
 });
+
+// ---- Re-import (upsert by key): refresh an existing collection from a new export
+async function reimportUpsert() {
+  const f = document.getElementById('reimportFile').files[0];
+  if (!f) { alert(t('alert_pick_file')); return; }
+  const fd = new FormData(); fd.append('file', f);
+  const r = await fetch('/api/import/upload', { method: 'POST', body: fd, headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) { alert((await r.json()).detail); return; }
+  const up = await r.json();
+  try {
+    const d = await api(`/api/collections/${currentColl}/reimport`, { method: 'POST', body: JSON.stringify({ upload_id: up.upload_id, key: 'item' }) });
+    alert(t('reimport_result', { ins: d.inserted, upd: d.updated, skip: d.skipped, err: d.error_count }));
+    await loadRows();
+  } catch (e) { alert(e.message); }
+}
 
 async function exportCsv() {
   const r = await fetch(`/api/collections/${currentColl}/export.csv`, { headers: { Authorization: 'Bearer ' + token } });

@@ -41,6 +41,9 @@ const I18N = {
     del_coll_btn: "Видалити",
     confirm_delete_coll: "Видалити колекцію «{name}» разом з {n} рядками? Введіть назву колекції для підтвердження:",
     confirm_delete_coll_mismatch: "Назва не збігається — видалення скасовано.",
+    reimport_btn: "↻ Повторний імпорт (upsert)",
+    alert_pick_file: "Виберіть файл для повторного імпорту",
+    reimport_result: "Повторний імпорт: +{ins} нових, {upd} оновлено, {skip} пропущено, помилок: {err}",
   },
   en: {
     app_tagline: "Import your process, don't change it",
@@ -83,6 +86,9 @@ const I18N = {
     del_coll_btn: "Delete",
     confirm_delete_coll: "Delete collection \"{name}\" with {n} rows? Type the collection name to confirm:",
     confirm_delete_coll_mismatch: "Name does not match — deletion cancelled.",
+    reimport_btn: "↻ Re-import (upsert)",
+    alert_pick_file: "Pick a file to re-import",
+    reimport_result: "Re-import: +{ins} inserted, {upd} updated, {skip} skipped, {err} errors",
   },
 };
 

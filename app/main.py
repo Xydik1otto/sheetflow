@@ -7,6 +7,7 @@ Routes:
           GET/POST /api/users       — user management (admin only)
   Import  POST /api/import/upload   — parse xlsx (admin)
           POST /api/import/map      — create collection from column mapping (admin)
+          POST /api/collections/{id}/reimport — upsert re-import by key (admin)
   Data    GET  /api/collections
           GET  /api/collections/{id}/rows      — filters: status, assignee, overdue
           PATCH/PUT /api/rows/{id}            — edit fields (audited; workers may edit)
@@ -228,6 +229,97 @@ def map_columns(body: MapIn, conn=Depends(db.db), user: str = Depends(require_ad
         "imported": len(typed_rows),
         "error_count": len(errors),
         "errors": [e.__dict__ for e in errors[:50]],
+    }
+
+
+# ------------------------------------------------ re-import (upsert by key)
+
+
+class ReimportIn(BaseModel):
+    upload_id: str
+    mapping: dict[str, str] | None = None  # None = reuse the collection's stored mapping
+    key: str = "item"  # entity field identifying existing rows (upsert key)
+    header_row: int | None = None
+    sheet: str | None = None
+
+
+@app.post("/api/collections/{cid}/reimport")
+def reimport(cid: int, body: ReimportIn, conn=Depends(db.db), user: str = Depends(require_admin)):
+    """Re-import a file into an existing collection, upsert by key (roadmap v1.1).
+
+    Rows are matched by the `key` entity field (default: item). Existing rows
+    are updated in place — blank cells never overwrite stored values (no data
+    loss on re-import); unknown keys are inserted. Every changed field is
+    audited plus one summary collection.reimported event.
+    """
+    coll = conn.execute("SELECT id, mapping_json FROM collections WHERE id = ?", (cid,)).fetchone()
+    if coll is None:
+        raise HTTPException(404, "Collection not found")
+    staged = _uploads.get(body.upload_id)
+    if staged is None:
+        raise HTTPException(404, "Unknown upload_id (re-upload the file)")
+    filename, data, parsed = staged
+    mapping = body.mapping if body.mapping is not None else importer.mapping_from_json(coll["mapping_json"])
+    if body.key not in mapping.values():
+        raise HTTPException(422, f"Key field {body.key!r} is not mapped; map the key column first")
+    problems = importer.validate_mapping(parsed.columns, mapping)
+    if problems:
+        raise HTTPException(422, "; ".join(problems))
+    if body.sheet and importer.is_xlsx(data):
+        if body.sheet not in importer.list_sheets(data):
+            raise HTTPException(422, f"Unknown worksheet {body.sheet!r}; "
+                                     f"available: {', '.join(importer.list_sheets(data))}")
+    typed_rows, errors = importer.build_rows(data, mapping, header_row=body.header_row,
+                                             sheet=body.sheet)
+    inserted = updated = skipped = 0
+    for r in typed_rows:
+        key_value = r[body.key]
+        if key_value is None:
+            skipped += 1  # cannot identify the row without a key value
+            continue
+        existing = conn.execute(
+            f"SELECT * FROM rows WHERE collection_id = ? AND {body.key} = ?", (cid, key_value)
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                "INSERT INTO rows (collection_id, item, quantity, status, assignee, due_date, amount, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (cid, r["item"], r["quantity"], r["status"] or "new", r["assignee"],
+                 r["due_date"], r["amount"], db.now_iso(), db.now_iso()),
+            )
+            inserted += 1
+            continue
+        changed = False
+        for field in importer.ENTITY_FIELDS:
+            if field == body.key:
+                continue
+            new_value = r[field]
+            if new_value is None or new_value == existing[field]:
+                continue  # blank cell never overwrites stored data
+            conn.execute(
+                f"UPDATE rows SET {field} = ?, updated_at = ? WHERE id = ?",
+                (new_value, db.now_iso(), existing["id"]),
+            )
+            db.audit(
+                conn, user, "row.updated", collection_id=cid, row_id=existing["id"],
+                field=field,
+                old_value=str(existing[field]) if existing[field] is not None else None,
+                new_value=str(new_value),
+            )
+            changed = True
+        if changed:
+            updated += 1
+    db.audit(
+        conn, user, "collection.reimported", collection_id=cid,
+        new_value=f"upsert by {body.key}: +{inserted} new, ~{updated} updated, "
+                  f"{skipped} skipped (from {filename})",
+    )
+    conn.commit()
+    del _uploads[body.upload_id]
+    return {
+        "ok": True, "collection_id": cid, "key": body.key,
+        "inserted": inserted, "updated": updated, "skipped": skipped,
+        "error_count": len(errors), "errors": [e.__dict__ for e in errors[:50]],
     }
 
 
