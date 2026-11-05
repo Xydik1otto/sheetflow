@@ -5,6 +5,7 @@ The user uploads their existing .xlsx, maps its columns onto known entities
 (item, quantity, status, assignee, due_date, amount) and SheetFlow creates a
 validated collection from it.
 """
+import csv
 import io
 import json
 from dataclasses import dataclass, field
@@ -15,6 +16,66 @@ from openpyxl import load_workbook
 import difflib
 
 ENTITY_FIELDS = ["item", "quantity", "status", "assignee", "due_date", "amount"]
+
+
+# ------------------------------------------------------------- csv support
+
+def is_xlsx(data: bytes) -> bool:
+    """XLSX files are ZIP archives and start with the PK\\x03\\x04 signature."""
+    return data[:2] == b"PK"
+
+
+def detect_encoding(data: bytes) -> str:
+    """Best-effort encoding detection for text uploads.
+
+    BOM wins first; then valid UTF-8; otherwise fall back to cp1251
+    (the de-facto Windows single-byte codepage for Ukrainian/Cyrillic CSVs).
+    """
+    if data.startswith(b"\xef\xbb\xbf"):
+        return "utf-8-sig"
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return "utf-16"
+    try:
+        data.decode("utf-8")
+        return "utf-8"
+    except UnicodeDecodeError:
+        return "cp1251"
+
+
+def detect_delimiter(text: str) -> str:
+    """Pick the column separator for a CSV/DSV text file.
+
+    csv.Sniffer on the first lines first; on failure a frequency+consistency
+    heuristic over , ; tab |. Falls back to comma.
+    """
+    lines = [ln for ln in text.splitlines()[:20] if ln.strip()]
+    sample = "\n".join(lines)
+    try:
+        return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+    except csv.Error:
+        pass
+    best, best_score = ",", 0
+    for d in (",", ";", "\t", "|"):
+        counts = [ln.count(d) for ln in lines]
+        if max(counts, default=0) == 0:
+            continue
+        # consistent separators (same count on every line) rank highest
+        score = counts[0] if len(set(counts)) == 1 else min(counts)
+        if score > best_score:
+            best, best_score = d, score
+    return best
+
+
+def csv_rows(data: bytes) -> tuple[list[list], str, str]:
+    """Decode + parse CSV bytes. Returns (rows, encoding, delimiter)."""
+    encoding = detect_encoding(data)
+    text = data.decode(encoding)
+    delimiter = detect_delimiter(text)
+    reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
+    # Empty lines are kept as [] so row indices match the xlsx path exactly
+    # (detect_header_row and build_rows handle/skip them the same way).
+    return list(reader), encoding, delimiter
+
 
 # Best-effort suggestions for the import wizard: entity -> known column-name
 # synonyms (EN + UA). Matching is hybrid: exact = 1.0, substring = 0.85,
@@ -144,6 +205,9 @@ class SheetParse:
     preview: list[dict]  # first rows as {column: value}
     total_rows: int
     header_row: int  # 0-based index of the row used as the header
+    source_format: str = "xlsx"  # 'xlsx' | 'csv'
+    encoding: str | None = None  # csv only
+    delimiter: str | None = None  # csv only
 
 
 @dataclass
@@ -163,11 +227,17 @@ class ImportReport:
 
 
 def iter_rows(data: bytes):
-    """Open the first worksheet and yield its rows as value tuples."""
-    wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-    ws = wb.active
-    yield from ws.iter_rows(values_only=True)
-    wb.close()
+    """Yield the rows of the first worksheet (xlsx) or of the CSV text file
+    as value tuples. One entry point for both formats, so header detection,
+    mapping and row building work identically."""
+    if is_xlsx(data):
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        ws = wb.active
+        yield from ws.iter_rows(values_only=True)
+        wb.close()
+    else:
+        rows, _encoding, _delim = csv_rows(data)
+        yield from rows
 
 
 def detect_header_row(data: bytes) -> int:
@@ -201,6 +271,11 @@ def parse_sheet(data: bytes, header_row: int | None = None) -> SheetParse:
     all_rows = list(iter_rows(data))
     if not all_rows:
         raise ValueError("The file is empty (no header row found)")
+    source_format = "xlsx" if is_xlsx(data) else "csv"
+    encoding = delimiter = None
+    if source_format == "csv":
+        encoding = detect_encoding(data)
+        delimiter = detect_delimiter(data.decode(encoding))
     header = all_rows[hr] if hr < len(all_rows) else all_rows[0]
     columns = [str(c).strip() if c is not None else f"column_{i}" for i, c in enumerate(header)]
     columns = [c if c else f"column_{i}" for i, c in enumerate(columns)]
@@ -211,7 +286,8 @@ def parse_sheet(data: bytes, header_row: int | None = None) -> SheetParse:
             preview.append({columns[i]: row[i] if i < len(row) else None for i in range(len(columns))})
     if not columns:
         raise ValueError("No columns detected in the file")
-    return SheetParse(columns=columns, preview=preview, total_rows=total, header_row=hr)
+    return SheetParse(columns=columns, preview=preview, total_rows=total, header_row=hr,
+                      source_format=source_format, encoding=encoding, delimiter=delimiter)
 
 
 def validate_mapping(columns: list[str], mapping: dict[str, str]) -> list[str]:

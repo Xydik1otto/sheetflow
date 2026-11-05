@@ -160,6 +160,9 @@ async def upload(file: UploadFile, header_row: int | None = Form(None),
         "total_rows": parsed.total_rows,
         "entity_fields": importer.ENTITY_FIELDS,
         "header_row": parsed.header_row + 1,  # echo back, 1-based as in the UI
+        "source_format": parsed.source_format,
+        "encoding": parsed.encoding,
+        "delimiter": parsed.delimiter,
         # Pre-filled mapping proposal — user sees it and can correct any column.
         "suggested_mapping": importer.suggest_mapping(parsed.columns),
     }
