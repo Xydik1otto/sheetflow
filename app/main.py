@@ -5,6 +5,7 @@ Routes:
   Auth    POST /api/login           — sets session token (roles: admin, worker)
           GET  /api/me
           GET/POST /api/users       — user management (admin only)
+          PATCH /api/users/{id}     — change a user's role (admin only)
   Import  POST /api/import/upload   — parse xlsx (admin)
           POST /api/import/map      — create collection from column mapping (admin)
           POST /api/collections/{id}/reimport — upsert re-import by key (admin)
@@ -143,6 +144,40 @@ def add_user(body: UserIn, conn=Depends(db.db), user: str = Depends(require_admi
     db.audit(conn, user, "user.created", new_value=f"{body.username} ({body.role})")
     conn.commit()
     return {"ok": True, "id": new_id, "username": body.username, "role": body.role}
+
+
+class UserRoleIn(BaseModel):
+    role: str  # 'admin' | 'worker'
+
+
+@app.patch("/api/users/{user_id}")
+def change_role(user_id: int, body: UserRoleIn, conn=Depends(db.db), user: str = Depends(require_admin)):
+    """Change a user's role from the UI (admin only, roadmap v1.1).
+
+    The last remaining admin cannot be demoted — the instance would be left
+    without anyone able to manage users, imports and the audit log.
+    """
+    if body.role not in db.ROLES:
+        raise HTTPException(422, f"Unknown role {body.role!r}; available: {', '.join(db.ROLES)}")
+    target = conn.execute("SELECT id, username, role FROM users WHERE id = ?", (user_id,)).fetchone()
+    if target is None:
+        raise HTTPException(404, "User not found")
+    if body.role == target["role"]:
+        return {"ok": True, "id": user_id, "username": target["username"],
+                "role": body.role, "changed": False}
+    if target["role"] == "admin" and body.role != "admin":
+        admins = conn.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'").fetchone()[0]
+        if admins <= 1:
+            raise HTTPException(409, "Cannot demote the last admin — promote another user first")
+    conn.execute(
+        "UPDATE users SET role = ?, is_admin = ? WHERE id = ?",
+        (body.role, 1 if body.role == "admin" else 0, user_id),
+    )
+    db.audit(conn, user, "user.role_changed",
+             new_value=f"{target['username']}: {target['role']} -> {body.role}")
+    conn.commit()
+    return {"ok": True, "id": user_id, "username": target["username"],
+            "role": body.role, "changed": True}
 
 
 # ---------------------------------------------------------------- import wizard

@@ -44,6 +44,8 @@ const I18N = {
     reimport_btn: "↻ Повторний імпорт (upsert)",
     alert_pick_file: "Виберіть файл для повторного імпорту",
     reimport_result: "Повторний імпорт: +{ins} нових, {upd} оновлено, {skip} пропущено, помилок: {err}",
+    users_h: "Користувачі та ролі", users_th_user: "Користувач", users_th_role: "Роль",
+    users_th_created: "Створено", role_changed: "Роль {username} змінено на {role}",
   },
   en: {
     app_tagline: "Import your process, don't change it",
@@ -89,6 +91,8 @@ const I18N = {
     reimport_btn: "↻ Re-import (upsert)",
     alert_pick_file: "Pick a file to re-import",
     reimport_result: "Re-import: +{ins} inserted, {upd} updated, {skip} skipped, {err} errors",
+    users_h: "Users & roles", users_th_user: "User", users_th_role: "Role",
+    users_th_created: "Created", role_changed: "Role of {username} changed to {role}",
   },
 };
 

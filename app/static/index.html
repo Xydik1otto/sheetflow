@@ -68,6 +68,11 @@ td select { min-width:90px; }
     <span class="muted" data-i18n="login_hint">Перший користувач — admin/admin123 (змініть пароль у БД)</span>
   </div>
 
+  <div class="card hidden" id="usersCard">
+    <h3 data-i18n="users_h">Користувачі та ролі</h3>
+    <table id="usersTable"><thead><tr><th data-i18n="users_th_user">Користувач</th><th data-i18n="users_th_role">Роль</th><th data-i18n="users_th_created">Створено</th></tr></thead><tbody></tbody></table>
+  </div>
+
   <div class="card hidden" id="step1">
     <h3 data-i18n="step1_h">1. Завантажте ваш .xlsx або .csv</h3>
     <input type="file" id="file" accept=".xlsx,.csv" aria-label="Файл .xlsx або .csv">
@@ -166,10 +171,35 @@ async function login() {
   boot();
 }
 
+// ---- Users & roles panel (admin only): change a user's role from the UI
+async function loadUsers() {
+  if (window.__role !== 'admin') return;
+  const users = await api('/api/users');
+  const tb = document.querySelector('#usersTable tbody'); tb.innerHTML = '';
+  users.forEach(u => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${u.username}</td>` +
+      `<td><select aria-label="Роль ${u.username}" onchange="changeRole(${u.id}, this.value)">` +
+      ['admin', 'worker'].map(r => `<option ${r === u.role ? 'selected' : ''}>${r}</option>`).join('') +
+      `</select></td><td class="muted">${u.created_at}</td>`;
+    tb.appendChild(tr);
+  });
+  document.getElementById('usersCard').classList.remove('hidden');
+}
+
+async function changeRole(id, role) {
+  try {
+    const d = await api('/api/users/' + id, { method: 'PATCH', body: JSON.stringify({ role }) });
+    if (d.changed) alert(t('role_changed', { username: d.username, role }));
+    await loadUsers();
+  } catch (e) { alert(e.message); await loadUsers(); }
+}
+
 async function boot() {
   document.getElementById('step1').classList.remove('hidden');
   try { window.__role = (await api('/api/me')).role; } catch (_) {}
   await loadCollections();
+  await loadUsers();
 }
 
 // ---- Data safety: one-click full export + guarded collection deletion
