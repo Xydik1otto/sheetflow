@@ -21,6 +21,17 @@ tr.overdue td { background:#fee2e2; }
 .muted { color:#64748b; font-size:12px; }
 .hidden { display:none; }
 pre { background:#0f172a; color:#e2e8f0; padding:10px; border-radius:6px; overflow:auto; font-size:12px; }
+.viewbtns { display:inline-flex; gap:4px; margin-left:8px; }
+.viewbtns button { padding:4px 10px; font-size:12px; opacity:.6; }
+.viewbtns button.active { opacity:1; }
+#kanban { display:none; gap:10px; overflow-x:auto; padding-bottom:8px; }
+#kanban.on { display:flex; }
+.kcol { min-width:200px; flex:1; background:#f1f5f9; border:1px solid var(--line); border-radius:8px; padding:8px; }
+.kcol h4 { margin:2px 4px 8px; font-size:13px; color:#334155; }
+.kcol.dragover { outline:2px dashed var(--accent); }
+.kcard { background:#fff; border:1px solid var(--line); border-radius:6px; padding:8px; margin-bottom:8px; cursor:grab; font-size:13px; }
+.kcard.dragging { opacity:.4; }
+.kcard .muted { display:block; margin-top:4px; }
 </style>
 </head>
 <body>
@@ -68,6 +79,11 @@ pre { background:#0f172a; color:#e2e8f0; padding:10px; border-radius:6px; overfl
     <input id="fQ" placeholder="Пошук...">
     <button class="secondary" onclick="loadRows()">Фільтрувати</button>
     <button class="secondary" onclick="exportCsv()">Експорт CSV</button>
+    <span class="viewbtns">
+      <button id="vTable" class="active" onclick="setView('table')">Таблиця</button>
+      <button id="vKanban" onclick="setView('kanban')">Канбан</button>
+    </span>
+    <div id="kanban"></div>
     <table id="rowsTable"><thead><tr><th>Item</th><th>Qty</th><th>Статус</th><th>Виконавець</th><th>Дедлайн</th><th>Сума</th></tr></thead><tbody></tbody></table>
     <h4>Журнал змін (audit)</h4>
     <div id="auditBox" class="muted"></div>
@@ -196,7 +212,58 @@ async function loadRows() {
 
 async function setStatus(id, status) {
   await api('/api/rows/' + id, { method: 'PATCH', body: JSON.stringify({ field: 'status', value: status }) });
-  await loadRows();
+  await Promise.all([loadRows(), currentView === 'kanban' ? loadKanban() : null]);
+}
+
+// ---- Kanban view: columns by status, drag & drop moves the card (PATCH status)
+let currentView = 'table', kanbanStatuses = [];
+
+function setView(v) {
+  currentView = v;
+  document.getElementById('vTable').classList.toggle('active', v === 'table');
+  document.getElementById('vKanban').classList.toggle('active', v === 'kanban');
+  document.getElementById('rowsTable').style.display = v === 'table' ? '' : 'none';
+  const kb = document.getElementById('kanban');
+  kb.classList.toggle('on', v === 'kanban');
+  if (v === 'kanban') loadKanban();
+}
+
+async function loadKanban() {
+  // Column set: default statuses + any status actually present in the data.
+  const all = await api(`/api/collections/${currentColl}/rows`);
+  const present = [...new Set(all.map(r => r.status || 'new'))];
+  kanbanStatuses = [...new Set([...['new', 'in_progress', 'done', 'blocked'], ...present])];
+  const p = new URLSearchParams();
+  if (fStatus.value) p.set('status', fStatus.value);
+  if (fOverdue.value) p.set('overdue', '1');
+  if (fQ.value) p.set('q', fQ.value);
+  const rows = p.toString() ? await api(`/api/collections/${currentColl}/rows?` + p) : all;
+  const kb = document.getElementById('kanban');
+  kb.innerHTML = '';
+  kanbanStatuses.forEach(st => {
+    const col = document.createElement('div');
+    col.className = 'kcol';
+    col.dataset.status = st;
+    col.innerHTML = `<h4>${st} <span class="muted">(${rows.filter(r => (r.status || 'new') === st).length})</span></h4>`;
+    rows.filter(r => (r.status || 'new') === st).forEach(r => {
+      const card = document.createElement('div');
+      card.className = 'kcard'; card.draggable = true; card.dataset.id = r.id;
+      const dd = r.overdue ? `<span class="badge-overdue">⚠ ${r.due_date}</span>` : (r.due_date || '');
+      card.innerHTML = `<b>${r.item ?? '(без назви)'}</b><span class="muted">${r.assignee ?? '—'} · ${dd || '—'} · ${r.quantity ?? ''}${r.amount ? ' · ' + r.amount : ''}</span>`;
+      card.addEventListener('dragstart', e => { card.classList.add('dragging'); e.dataTransfer.setData('text/plain', r.id); });
+      card.addEventListener('dragend', () => card.classList.remove('dragging'));
+      col.appendChild(card);
+    });
+    col.addEventListener('dragover', e => { e.preventDefault(); col.classList.add('dragover'); });
+    col.addEventListener('dragleave', () => col.classList.remove('dragover'));
+    col.addEventListener('drop', async e => {
+      e.preventDefault(); col.classList.remove('dragover');
+      const id = e.dataTransfer.getData('text/plain');
+      const row = all.find(r => String(r.id) === id);
+      if (row && (row.status || 'new') !== st) await setStatus(id, st);
+    });
+    kb.appendChild(col);
+  });
 }
 
 // Inline editing: editable cells save via PUT on focus loss; Escape cancels.
