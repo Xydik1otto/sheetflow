@@ -68,6 +68,8 @@ td select { min-width:90px; }
     <h3 data-i18n="step1_h">1. Завантажте ваш .xlsx або .csv</h3>
     <input type="file" id="file" accept=".xlsx,.csv" aria-label="Файл .xlsx або .csv">
     <button onclick="upload()" data-i18n="upload_btn">Аналізувати</button>
+    <span class="muted" data-i18n="demo_hint">Новий тут?</span>
+    <button class="secondary" onclick="loadDemo()" data-i18n="demo_btn"> завантажити демо-колекцію</button>
   </div>
 
   <div class="card hidden" id="step2">
@@ -231,6 +233,15 @@ async function createFromTemplate() {
   const d = await api('/api/collections/from-template', { method: 'POST', body: JSON.stringify({ template: key }) });
   await loadCollections();
   openColl(d.collection_id, d.name);
+}
+
+// ---- First-run demo: opt-in demo collection showcasing fields + formulas
+async function loadDemo() {
+  try {
+    const d = await api('/api/demo', { method: 'POST' });
+    await loadCollections();
+    openColl(d.collection_id, d.name);
+  } catch (e) { alert(e.message); }
 }
 
 async function openColl(id, name) {

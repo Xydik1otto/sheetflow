@@ -758,6 +758,48 @@ def from_template(body: FromTemplateIn, conn=Depends(db.db), user: str = Depends
     return {"ok": True, "collection_id": collection_id, "name": name, "imported": imported}
 
 
+# ------------------------------------------------------------- first-run demo
+
+
+@app.post("/api/demo")
+def load_demo(conn=Depends(db.db), user: str = Depends(require_admin)):
+    """First-run helper: create a demo collection (opt-in) showcasing custom
+    fields and formulas. Refuses to duplicate an existing demo collection."""
+    existing = conn.execute(
+        "SELECT id, name FROM collections WHERE source_file = 'demo:orders'"
+    ).fetchone()
+    if existing is not None:
+        raise HTTPException(409, f"Demo collection already exists (#{existing['id']} {existing['name']!r})")
+    t = templates.TEMPLATES["orders"]
+    cur = conn.execute(
+        "INSERT INTO collections (name, source_file, mapping_json, calc_json, created_by, created_at) "
+        "VALUES (?, 'demo:orders', ?, ?, ?, ?)",
+        (f"Демо · {t['name']}", importer.mapping_to_json(t["mapping"]), None, user, db.now_iso()),
+    )
+    cid = cur.lastrowid
+    imported = 0
+    for raw in t["sample_rows"]:
+        typed = {f: None for f in importer.ENTITY_FIELDS}
+        for col, ent in t["mapping"].items():
+            value, _err = importer.VALIDATORS[ent](raw.get(col))
+            typed[ent] = value
+        conn.execute(
+            "INSERT INTO rows (collection_id, item, quantity, status, assignee, due_date, amount, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (cid, typed["item"], typed["quantity"], typed["status"] or "new",
+             typed["assignee"], typed["due_date"], typed["amount"], db.now_iso(), db.now_iso()),
+        )
+        imported += 1
+    db.add_custom_field(conn, cid, "channel", "Канал продажу", "select", ["Онлайн", "Телефон", "Магазин"], 0)
+    db.add_custom_field(conn, cid, "paid", "Оплачено", "number", None, 1)
+    conn.execute("UPDATE collections SET calc_json = ? WHERE id = ?",
+                 (calc.calc_to_json({"total": "=quantity*amount"}), cid))
+    db.audit(conn, user, "collection.created", collection_id=cid,
+             new_value=f"demo collection with {imported} sample rows, custom fields and formulas")
+    conn.commit()
+    return {"ok": True, "collection_id": cid, "name": f"Демо · {t['name']}", "imported": imported}
+
+
 @app.get("/")
 def index():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
