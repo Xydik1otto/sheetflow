@@ -149,11 +149,13 @@ def add_user(body: UserIn, conn=Depends(db.db), user: str = Depends(require_admi
 
 @app.post("/api/import/upload")
 async def upload(file: UploadFile, header_row: int | None = Form(None),
-                 user: str = Depends(require_admin)):
-    """Parse the xlsx. header_row: 1-based manual header selection; omitted = auto-detect."""
+                 sheet: str | None = Form(None), user: str = Depends(require_admin)):
+    """Parse an xlsx worksheet (or CSV). header_row: 1-based manual header
+    selection; omitted = auto-detect. sheet: worksheet name; omitted = the
+    active (first) sheet. The response lists all worksheets for the selector."""
     data = await file.read()
     try:
-        parsed = importer.parse_sheet(data, header_row=header_row)
+        parsed = importer.parse_sheet(data, header_row=header_row, sheet=sheet)
     except Exception as exc:  # openpyxl raises a zoo of exception types
         raise HTTPException(400, f"Cannot parse file: {exc}")
     upload_id = uuid.uuid4().hex
@@ -168,6 +170,8 @@ async def upload(file: UploadFile, header_row: int | None = Form(None),
         "source_format": parsed.source_format,
         "encoding": parsed.encoding,
         "delimiter": parsed.delimiter,
+        "sheets": importer.list_sheets(data),
+        "sheet": parsed.sheet,
         # Pre-filled mapping proposal — user sees it and can correct any column.
         "suggested_mapping": importer.suggest_mapping(parsed.columns),
     }
@@ -178,6 +182,7 @@ class MapIn(BaseModel):
     name: str
     mapping: dict[str, str]
     header_row: int | None = None  # must match the header_row used at upload
+    sheet: str | None = None  # must match the sheet used at upload
 
 
 @app.post("/api/import/map")
@@ -186,6 +191,10 @@ def map_columns(body: MapIn, conn=Depends(db.db), user: str = Depends(require_ad
     if staged is None:
         raise HTTPException(404, "Unknown upload_id (re-upload the file)")
     filename, data, parsed = staged
+    if body.sheet and importer.is_xlsx(data):
+        if body.sheet not in importer.list_sheets(data):
+            raise HTTPException(422, f"Unknown worksheet {body.sheet!r}; "
+                                     f"available: {', '.join(importer.list_sheets(data))}")
     problems = importer.validate_mapping(parsed.columns, body.mapping)
     if problems:
         raise HTTPException(422, "; ".join(problems))
@@ -196,7 +205,8 @@ def map_columns(body: MapIn, conn=Depends(db.db), user: str = Depends(require_ad
         (body.name, filename, importer.mapping_to_json(body.mapping), None, user, db.now_iso()),
     )
     collection_id = cur.lastrowid
-    typed_rows, errors = importer.build_rows(data, body.mapping, header_row=body.header_row)
+    typed_rows, errors = importer.build_rows(data, body.mapping, header_row=body.header_row,
+                                             sheet=body.sheet)
     for r in typed_rows:
         conn.execute(
             "INSERT INTO rows (collection_id, item, quantity, status, assignee, due_date, amount, "

@@ -67,7 +67,8 @@ td select { min-width:90px; }
 
   <div class="card hidden" id="step2">
     <h3>2. Назвіть колекцію та змапте колонки</h3>
-    <label>Рядок-шапка: <select id="hdrRow" onchange="upload(this.value)"></select></label>
+    <span id="sheetBox" class="hidden"><label>Аркуш: <select id="sheetSel" onchange="upload(null, this.value)" aria-label="Аркуш Excel"></select></label></span>
+    <label>Рядок-шапка: <select id="hdrRow" onchange="upload(this.value, lastSheet)" aria-label="Рядок-шапка"></select></label>
     <input id="collName" placeholder="Назва, напр. Замовлення">
     <table id="mapTable"><thead><tr><th>Колонка з файлу</th><th>Приклад</th><th>Сутність</th></tr></thead><tbody></tbody></table>
     <button onclick="doMap()">Створити колекцію</button>
@@ -123,7 +124,7 @@ td select { min-width:90px; }
 </main>
 <script>
 let token = localStorage.getItem('token') || '';
-let uploadId = null, columns = [], currentColl = null;
+let uploadId = null, columns = [], currentColl = null, lastSheet = null;
 const ENTITIES = ['', 'item', 'quantity', 'status', 'assignee', 'due_date', 'amount'];
 
 async function api(path, opts = {}) {
@@ -147,16 +148,24 @@ async function boot() {
 
 let lastFile = null;
 
-async function upload(manualHeader) {
+async function upload(manualHeader, sheet) {
   const f = lastFile || file.files[0];
   if (!f) return;
   lastFile = f;
   const fd = new FormData(); fd.append('file', f);
   if (manualHeader) fd.append('header_row', manualHeader);
+  if (sheet) fd.append('sheet', sheet);
   const r = await fetch('/api/import/upload', { method: 'POST', body: fd, headers: { Authorization: 'Bearer ' + token } });
   if (!r.ok) { alert((await r.json()).detail); return; }
   const d = await r.json();
   uploadId = d.upload_id; columns = d.columns;
+  lastSheet = d.sheet || null;
+  const sb = document.getElementById('sheetBox');
+  if ((d.sheets || []).length > 1) {
+    sb.classList.remove('hidden');
+    document.getElementById('sheetSel').innerHTML =
+      d.sheets.map(s => `<option value="${s}" ${s === d.sheet ? 'selected' : ''}>${s}</option>`).join('');
+  } else sb.classList.add('hidden');
   const hdr = document.getElementById('hdrRow');
   const maxRow = Math.min(12, d.header_row + 10);
   hdr.innerHTML = `<option value="">Авто (рядок ${d.header_row})</option>` +
@@ -178,7 +187,7 @@ async function doMap() {
   const mapping = {};
   document.querySelectorAll('#mapTable select').forEach(s => { if (s.value) mapping[s.dataset.col] = s.value; });
   const hdrVal = document.getElementById('hdrRow').value;
-  const d = await api('/api/import/map', { method: 'POST', body: JSON.stringify({ upload_id: uploadId, name: collName.value || 'Без назви', mapping, header_row: hdrVal ? Number(hdrVal) : null }) });
+  const d = await api('/api/import/map', { method: 'POST', body: JSON.stringify({ upload_id: uploadId, name: collName.value || 'Без назви', mapping, header_row: hdrVal ? Number(hdrVal) : null, sheet: lastSheet }) });
   document.getElementById('mapResult').innerHTML = `<pre>${JSON.stringify({ imported: d.imported, errors: d.error_count }, null, 2)}</pre>`;
   await loadCollections();
 }

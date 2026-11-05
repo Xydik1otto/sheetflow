@@ -233,6 +233,7 @@ class SheetParse:
     source_format: str = "xlsx"  # 'xlsx' | 'csv'
     encoding: str | None = None  # csv only
     delimiter: str | None = None  # csv only
+    sheet: str | None = None  # selected worksheet (xlsx), None = active sheet
 
 
 @dataclass
@@ -251,13 +252,26 @@ class ImportReport:
     errors: list[RowError] = field(default_factory=list)
 
 
-def iter_rows(data: bytes):
-    """Yield the rows of the first worksheet (xlsx) or of the CSV text file
+def list_sheets(data: bytes) -> list[str]:
+    """Worksheet names of an xlsx (CSV has a single pseudo-sheet)."""
+    if is_xlsx(data):
+        wb = load_workbook(io.BytesIO(data), read_only=True)
+        names = list(wb.sheetnames)
+        wb.close()
+        return names
+    return ["csv"]
+
+
+def iter_rows(data: bytes, sheet: str | None = None):
+    """Yield the rows of one worksheet (xlsx) or of the CSV text file
     as value tuples. One entry point for both formats, so header detection,
-    mapping and row building work identically."""
+    mapping and row building work identically.
+
+    sheet: name of the worksheet to read; None = the active (first) sheet.
+    """
     if is_xlsx(data):
         wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-        ws = wb.active
+        ws = wb[sheet] if sheet and sheet in wb.sheetnames else wb.active
         yield from ws.iter_rows(values_only=True)
         wb.close()
     else:
@@ -265,11 +279,11 @@ def iter_rows(data: bytes):
         yield from rows
 
 
-def detect_header_row(data: bytes) -> int:
+def detect_header_row(data: bytes, sheet: str | None = None) -> int:
     """0-based index of the first non-empty row whose non-empty cells are
     mostly text (>50%, at least 2 cells) — real sheets often start with a
     merged title cell or a blank band; a lone text cell is a title, not a header."""
-    for i, row in enumerate(iter_rows(data)):
+    for i, row in enumerate(iter_rows(data, sheet)):
         cells = [c for c in row if not _is_blank(c)]
         if len(cells) < 2:
             continue
@@ -279,21 +293,22 @@ def detect_header_row(data: bytes) -> int:
     return 0
 
 
-def resolve_header_row(data: bytes, header_row: int | None = None) -> int:
+def resolve_header_row(data: bytes, header_row: int | None = None, sheet: str | None = None) -> int:
     """header_row given by the user is 1-based as shown in the UI; None = auto-detect."""
     if header_row is not None:
         return header_row - 1  # UI is 1-based
-    return detect_header_row(data)
+    return detect_header_row(data, sheet)
 
 
-def parse_sheet(data: bytes, header_row: int | None = None) -> SheetParse:
-    """Parse the first worksheet of an .xlsx into columns + preview rows.
+def parse_sheet(data: bytes, header_row: int | None = None, sheet: str | None = None) -> SheetParse:
+    """Parse one worksheet of an .xlsx (or a CSV) into columns + preview rows.
 
     header_row: 1-based row to use as the header (manual selection); None
     auto-detects the first mostly-text non-empty row.
+    sheet: worksheet name (xlsx); None = the active (first) sheet.
     """
-    hr = resolve_header_row(data, header_row)
-    all_rows = list(iter_rows(data))
+    hr = resolve_header_row(data, header_row, sheet)
+    all_rows = list(iter_rows(data, sheet))
     if not all_rows:
         raise ValueError("The file is empty (no header row found)")
     source_format = "xlsx" if is_xlsx(data) else "csv"
@@ -312,7 +327,8 @@ def parse_sheet(data: bytes, header_row: int | None = None) -> SheetParse:
     if not columns:
         raise ValueError("No columns detected in the file")
     return SheetParse(columns=columns, preview=preview, total_rows=total, header_row=hr,
-                      source_format=source_format, encoding=encoding, delimiter=delimiter)
+                      source_format=source_format, encoding=encoding, delimiter=delimiter,
+                      sheet=sheet if source_format == "xlsx" else None)
 
 
 def validate_mapping(columns: list[str], mapping: dict[str, str]) -> list[str]:
@@ -335,16 +351,18 @@ def validate_mapping(columns: list[str], mapping: dict[str, str]) -> list[str]:
 
 
 def build_rows(data: bytes, mapping: dict[str, str],
-               header_row: int | None = None) -> tuple[list[dict], list[RowError]]:
+               header_row: int | None = None,
+               sheet: str | None = None) -> tuple[list[dict], list[RowError]]:
     """Apply the mapping to the whole sheet. Returns (typed_rows, errors).
 
     header_row: 1-based row to use as the header (manual selection); None
-    auto-detects, mirroring parse_sheet. Rows are always returned with all 6
+    auto-detects, mirroring parse_sheet. sheet: worksheet name (xlsx); None
+    = the active (first) sheet. Rows are always returned with all 6
     entity keys (None where absent/invalid); rows whose 'item' (identity)
     could not be parsed are skipped and reported.
     """
-    all_rows = list(iter_rows(data))
-    hr = resolve_header_row(data, header_row)
+    all_rows = list(iter_rows(data, sheet))
+    hr = resolve_header_row(data, header_row, sheet)
     header_row_values = all_rows[hr] if hr < len(all_rows) else all_rows[0]
     header = [str(c).strip() if c is not None else "" for c in header_row_values]
     col_index = {name: i for i, name in enumerate(header)}
