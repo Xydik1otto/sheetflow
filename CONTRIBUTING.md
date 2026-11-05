@@ -3,8 +3,16 @@
 Дякуємо за інтерес до проєкту! Будь-який внесок вітається: баг-репорти,
 ідеї, переклади, код.
 
-Thank you for your interest in SheetFlow! Contributions of every kind are
-welcome: bug reports, ideas, translations, code.
+> English version: [CONTRIBUTING.en.md](CONTRIBUTING.en.md) — дзеркальний
+> переклад цього документа.
+
+## Мови / Languages
+
+Інтерфейс і документація — **українською та англійською**
+(Ukrainian and English). Російську локалізацію не додаємо — це свідоме рішення власника
+проєкту; такі PR закриваються без обговорення. Тест
+`tests/test_i18n.py::test_no_russian_in_i18n_and_ui` автоматично відхиляє
+російські літери (див. розділ [i18n](#i18n-ua--en) нижче).
 
 ## Як повідомити про проблему / How to report a bug
 
@@ -13,46 +21,290 @@ welcome: bug reports, ideas, translations, code.
    та українською, пишіть будь-якою з цих мов.
 3. Додайте: версію Python, ОС, кроки відтворення, очікуваний/фактичний результат.
 
-1. Check whether the problem already exists in [issues](../../issues).
-2. Open a new issue using the **Bug report** template — it is in English and
-   Ukrainian; write in either language.
-3. Include: Python version, OS, steps to reproduce, expected/actual result.
-
 ## Пропозиції функцій / Feature requests
 
-Використовуйте шаблон **Feature request**: описуємо проблему, яку фіча розв'язує,
-а не лише «хочу кнопку». / Use the **Feature request** template: describe the
-problem the feature solves, not just "I want a button".
+Використовуйте шаблон **Feature request**: описуємо проблему, яку фіча
+розв'язує, а не лише «хочу кнопку».
+
+## Логіка проєкту / How the code works
+
+SheetFlow — це FastAPI + sqlite3 (без ORM), фронтенд — vanilla JS без
+build-кроку в `app/static/`. Ключова ідея: **імпортувати процес
+користувача, а не змушувати його міняти процес**.
+
+### `app/importer.py` — парсинг xlsx/CSV і мапінг колонок
+
+Конвеєр імпорту складається з чотирьох кроків; вони однакові для `.xlsx`
+(openpyxl) і `.csv`, бо обидва формати зводяться до рядків кортежів через
+`iter_rows()`:
+
+1. **Визначення формату та розшифрування.**
+   - `is_xlsx()`: xlsx — це ZIP-архів, розпізнається за сигнатурою `PK`;
+   - `detect_encoding()` для текстових файлів: BOM → `utf-8-sig` /
+     `utf-16`, далі спроба `utf-8`, інакше fallback на `cp1251` (де-факто
+     кодова сторінка україномовних CSV з Windows);
+   - `detect_delimiter()`: спершу `csv.Sniffer` по перших 20 рядках, при
+     невдачі — евристика частоти + консистентності (однакова кількість
+     розділювачів у кожному рядку оцінюється вище) по `, ; tab |`,
+     fallback — кома.
+2. **Пошук рядка-шапки.** `detect_header_row()` повертає 0-based індекс
+   першого непорожнього рядка, в якому ≥2 непустих клітинки і понад 50 %
+   з них — текст: реальні аркуші часто починаються з об'єднаного
+   заголовка або порожньої смуги, а одна текстова клітинка — це назва,
+   не шапка. `resolve_header_row()` приймає ручний вибір користувача як
+   **1-based** номер (так, як показано в UI) і переводить у 0-based.
+3. **Мапінг колонок на сутності.** `ENTITY_FIELDS` — шість канонічних
+   полів: `item`, `quantity`, `status`, `assignee`, `due_date`, `amount`.
+   `suggest_mapping()` пропонує `{колонка -> сутність}` для майстра
+   імпорту гібридним скорингом по словнику синонімів `FIELD_SYNONYMS`
+   (EN + UA): точний збіг = 1.0, підстрока = 0.85, інакше
+   `difflib.SequenceMatcher().ratio()`; поріг — `SUGGEST_THRESHOLD = 0.6`.
+   Призначення жадібне one-to-one, за спаданням оцінки — колонка ніколи
+   не забирає сутність, уже зайняту кращим збігом.
+4. **Побудова рядків.** `parse_sheet()` повертає `SheetParse` (колонки,
+   прев'ю до 10 рядків, загальна кількість, індекс шапки). `build_rows()`
+   застосовує мапінг до цілого аркуша: кожне значення проходить коерсер
+   з `VALIDATORS` (за сутністю) і повертає `(value, error)`. Рядок
+   пропускається, тільки якщо не розпарсився `item` (ідентичність) або
+   він повністю порожній; помилки збираються в `RowError`, нічого не
+   падає мовчки. `validate_mapping()` перевіряє: мапінг непорожній,
+   колонки існують, сутності відомі й не задублені.
+
+Користувацькі поля валідуються `coerce_custom_value(ftype, v, options)`
+для типів `text | number | date | select` — тією ж конвенцією
+`(value, error)`, порожнє значення завжди валідне (None).
+
+### `app/calc.py` — формули з валідацією циклів через DFS
+
+Колекція може визначати обчислювані колонки, напр.
+`{"total": "=quantity*amount"}`. Обмеження навмисно жорсткі: тільки
+арифметика `+ - * / ( )`, числа та ідентифікатори (поля сутностей +
+інші calc-колонки); жодних викликів функцій, атрибутів чи довільних імен.
+
+- `parse_formula_tokens()` — токенізатор; будь-який сторонній символ
+  відхиляється з `ValueError` (це й є захист перед `eval`).
+- `validate_formula()` — перевірка при збереженні: невідомий
+  ідентифікатор = помилка.
+- `evaluate_formula()` — підставляє числа рядка; `None` у вході
+  поширюється в `None` результату (не 0 і не помилка), ділення на нуль
+  теж дає `None`.
+- `evaluate_row()` — рахує всі calc-колонки рядка; вони можуть
+  посилатися одна на одну.
+- `detect_cycles()` — DFS з трьома кольорами (WHITE/GRAY/BLACK)
+  знаходить циклічні залежності (напр. `a = b+1`, `b = a*2`) і
+  повертає список циклів; порожній список = набір формул — коректний
+  DAG. Формули з циклом зберігати не дається: спроба відхиляється на
+  ендпоінті з помилкою, а не дає `None` на кожному рядку.
+
+### `app/db.py::audit` — патерн audit_events: КОЖНА зміна логується
+
+Кожна зміна стану проходить через `db.audit(conn, user, action, ...)` —
+INSERT у таблицю `audit_events` (ts, user, collection_id, row_id, action,
+field, old_value, new_value). Це правило без винятків: створення
+колекцій (`collection.created`) і рядків, редагування полів
+(`row.edited` з `field`/`old_value`/`new_value`), видалення
+(`row.deleted`, `rows.bulk_deleted`, `collection.deleted`),
+користувацькі поля (`field.created`, `field.deleted`), збережені
+фільтри (`filter.saved`, `filter.deleted`), користувачі
+(`user.created`), шаблони й демо. Якщо ви додаєте новий ендпоінт, що
+міняє дані, — він **обов'язково** викликає `db.audit`; лог читається
+через `GET /api/collections/{cid}/audit` (тільки admin).
+
+### Ролі та права: admin / worker
+
+Усі API-роути вимагають Bearer-токен сесії (`current_user_info`).
+Ролі — `admin` та `worker` (`db.ROLES`), перший користувач системи
+створюється адміном (`ensure_admin`).
+
+| Дія | admin | worker |
+|---|---|---|
+| Логін, читання колекцій/рядків, фільтрація, експорт | так | так |
+| Редагування рядків (по одному, bulk-статус) | так | так |
+| Канбан, збережені фільтри (свої), custom-значення | так | так |
+| Видалення своїх збережених фільтрів | так | так |
+| Імпорт файлу, мапінг колонок | так | ні (403) |
+| Створення/видалення колекцій, з шаблону, демо | так | ні (403) |
+| Користувацькі поля: створення/видалення | так | ні (403) |
+| Формули (calc-колонки) | так | ні (403) |
+| Управління користувачами, аудит, reminders run/flush | так | ні (403) |
+| Видалення чужого збереженого фільтра | так | ні (403) |
+
+Ключова функція — `require_admin()`: піднімає `HTTPException(403,
+"Admin role required")`. Правило: все, що змінює структуру колекції або
+дані масово/незворотно, — тільки admin; worker працює з рядками.
+Єдиний виняток: збережений фільтр може видалити його автор або admin.
+
+### Користувацькі поля: `custom_fields` + `extra_json`
+
+Користувацькі поля живуть у таблиці `custom_fields` (name, label, type,
+options_json, position — унікальні на колекцію), а їхні значення — у
+`rows.extra_json` як JSON-словник `{name: value}`. Такий дизайн свідомий:
+колонки в `rows` фіксовані шістьма сутностями, і довільні поля
+користувача не ламають схему. Типи: `text`, `number`, `date`, `select`
+(з `options_json`). Видалення поля обов'язково тягне
+`drop_custom_field_values` — значення витираються з `extra_json` усіх
+рядків колекції. Пошук по рядках включає значення `extra_json`
+(див. `app/main.py`, побудова `search_blob`).
+
+## Середовище і тести / Environment & tests
+
+```bash
+git clone https://github.com/<user>/sheetflow.git && cd sheetflow
+python -m pip install -r requirements.txt
+python -m pytest tests/ -v          # має бути зеленим до PR
+python -m uvicorn app.main:app --reload
+```
+
+Див. також [INSTALL.md](INSTALL.md).
+
+Тести не чіпають реальні файли й БД: `tests/conftest.py` дає
+
+- `client` — свіжа SQLite-БД у `tmp_path` на кожен тест
+  (`SHEETFLOW_DB` через monkeypatch), admin `admin/admin123`,
+  залогінений `TestClient` з Bearer-токеном;
+- `make_xlsx(rows, headers=None)` — **xlsx-фікстура on-the-fly**:
+  будує робочий зошит openpyxl у пам'яті (`io.BytesIO`) — ніяких
+  бінарних файлів у репозиторії; `sample_xlsx` — стандартний набір з 4
+  рядків (валідні, граничні, зіпсовані), `imported_collection` — вже
+  імпортована колекція з цим файлом.
+
+Нові тести пишуться в тому ж стилі: API через `client`, чисті функції
+(`importer`, `calc`) — напряму, без HTTP.
+
+## Як додати ПОЛЕ-СУТНІСТЬ / Adding a new entity field
+
+Приклад: додаємо `priority`. Це поле першого класу — колонка в таблиці
+`rows`, учасник мапінгу і формул. Покроково:
+
+1. **`app/importer.py` → `ENTITY_FIELDS`**: додайте `"priority"` до
+   списку канонічних полів.
+2. **`app/importer.py` → `FIELD_SYNONYMS`**: додайте ключ
+   `"priority"` зі списком синонімів — **і EN, і UA**, саме по них
+   `suggest_mapping()` вгадує колонки користувача: напр.
+   `["priority", "prio", "importance", "пріоритет", "важливість",
+   "терміновість"]`. Беріть реальні варіанти з живих таблиць; без
+   UA-синонімів майстер імпорту не впізнає україномовні колонки.
+3. **`app/importer.py` → коерсер + `VALIDATORS`**: напишіть
+   `_coerce_priority(v) -> (value, error)` за конвенцією порожнє = None,
+   зіпсоване = `(None, "message")` — і додайте до `VALIDATORS`.
+   Порожнє значення **завжди** валідне: поля опціональні на рядок.
+4. **`app/db.py` → `SCHEMA`**: додайте колонку в `CREATE TABLE rows`;
+   для існуючих БД — запис у `MIGRATIONS`
+   (`"rows": {"priority": "ALTER TABLE rows ADD COLUMN priority ..."}`),
+   `init_db()` застосує її сам.
+5. **`app/main.py`**: вставте поле у SELECT-и, створення рядка,
+   редагування, CSV/JSON-експорт і канбан — орієнтуйтеся на
+   `ENTITY_FIELDS` у коді.
+6. **`app/static/i18n.js`**: заголовок колонки в обох словниках
+   (`ua` і `en`), напр. `th_priority`.
+7. **Тести**: `tests/test_importer.py` (коерсер: валідне/порожнє/
+   зіпсоване), `tests/test_fuzzy_mapping.py` (UA і EN синонім
+   вгадується), `tests/test_api.py` (поле проходить import → list →
+   edit → export).
+8. **README (обидва) + CHANGELOG** — оновіть перелік сутностей.
+
+## Як додати ШАБЛОН КОЛЕКЦІЇ / Adding a collection template
+
+Шаблони живуть в `app/templates.py` у словнику `TEMPLATES` — це класичні
+процеси («Замовлення», «Клієнти», «Інвентар», «Задачі», «Підписки»),
+які створюються одним кліком з готовими прикладними рядками.
+
+1. Додайте ключ у `TEMPLATES`:
+   ```python
+   "contracts": {
+       "name": "Договори",                       # назва в UI
+       "columns": ["Контрагент", "К-сть", ...],  # канонічні колонки
+       "mapping": {"Контрагент": "item", ...},   # колонка -> ENTITY_FIELD
+       "sample_rows": [ {...}, {...} ],          # 2 реалістичні рядки
+   },
+   ```
+2. Правила: `mapping` має використовувати лише відомі `ENTITY_FIELDS`,
+   кожна колонка з `columns` — змаплена; `sample_rows` — рівно ті ж
+   ключі, що й `columns`; значення — реалістичні (дати ISO
+   `YYYY-MM-DD`, числа — числами).
+3. `POST /api/collections/from-template` (тільки admin) створює колекцію
+   з шаблону: колонки, мапінг і прикладні рядки пишуться в БД, подія
+   логується як `collection.created`.
+4. **Тести**: `tests/test_templates.py` — інваріанти всіх шаблонів
+   (мапінг валідний, рядки відповідають колонкам); додайте випадок
+   нового шаблону.
+5. Якщо у шаблоні з'явилися нові назви колонок — додайте їх як синоніми
+   у `FIELD_SYNONYMS` (розділ вище), щоб імпорт «такого ж» файлу
+   впізнавався автоматично.
+
+## Гілки, коміти, PR / Branches, commits, PRs
+
+- **`main` — стабільна гілка**: зелений pytest, чисте дерево, кожен
+  коміт можна розгорнути. Не пушимо в `main` недоведене і не ребейзимо
+  опубліковану історію без потреби.
+- Фічі робіть у гілці `feat/<назва>`, фікси — `fix/<назва>`,
+  документацію — `docs/<назва>`; PR у `main`.
+- Один коміт = одне логічне зміна; повідомлення — короткий імператив
+  англійською (`Docs: expanded CONTRIBUTING (UA+EN)`,
+  `feat: reminders outbox`, `fix: cp1251 csv encoding`).
+- Кожна фіча = коміт + pytest-тести. PR без тестів не мержиться.
+- Перед PR: `python -m pytest tests/ -v` зелений, `git status` чистий.
 
 ## Стиль коду / Code style
 
-- Python: стандартна бібліотека там, де можливо; без нових залежностей без
-  обговорення. FastAPI + sqlite3 (без ORM).
+- Python: стандартна бібліотека там, де можливо; без нових залежностей
+  без обговорення. FastAPI + sqlite3 (без ORM).
 - Кожна фіча = окремий commit + pytest-тести (`python -m pytest tests/ -v`).
 - Фронтенд — vanilla JS без build-кроку в `app/static/`.
 
-- Python: stdlib where possible; no new dependencies without discussion.
-  FastAPI + sqlite3 (no ORM).
-- Every feature = one commit + pytest tests (`python -m pytest tests/ -v`).
-- Frontend is vanilla JS with no build step in `app/static/`.
+## i18n (UA + EN)
 
-## Мови / Languages
+Уся локалізація UI — в `app/static/i18n.js`: два словники `ua:` та `en:`
+з однаковим набором ключів; HTML-розмітка позначається
+`data-i18n="ключ"` (текст) / `data-i18n-ph="ключ"` (placeholder),
+функція `applyI18n()` розставляє рядки. Мова визначається так:
+`localStorage.getItem('lang')` (збережений вибір) важливіший за
+`navigator.language` (авто: `startsWith("uk")` → ua), далі дефолт ua;
+перемикач `#langSel` зберігає вибір через `setLang`.
 
-Інтерфейс і документація — **українською та англійською**. Російську
-локалізацію не додаємо — це свідоме рішення власника проєкту; такі PR
-закриваються без обговорення.
+Правила:
 
-The UI and docs are **Ukrainian and English**. Russian localization is not
-accepted — a deliberate decision of the project owner; such PRs are closed
-without discussion.
+- Новий текст в UI **завжди** в обох словниках — ключ без пари в другій
+  мові ламає `test_dictionaries_have_ua_and_en`.
+- **НІКОЛИ російської.** Це політика проєкту, і вона автоматизована:
+  `test_no_russian_in_i18n_and_ui` регекспом `[ЫыЪъЭэЁё]` шукає
+  російськомовні літери (ы, ъ, э, ё — яких немає в українському
+  алфавіті) у `/static/i18n.js` та на головній сторінці. Українські
+  `и`/`і`/`є`/`ї`/`ґ` — дозволені; якщо ваш текст містить ы/ъ/э/ё — це
+  російська, перепишіть.
+- Документи (`README.md`, `README.en.md`, цей файл) проходять той самий
+  фільтр у `test_oss.py` / `test_readmes.py`.
+
+## Безпека: що НІКОЛИ не міняти / Security: never change
+
+Поточна модель (`app/db.py`) проста і чесна — не «поліпшуйте» її без
+обговорення в issue:
+
+- **Паролі — PBKDF2-HMAC-SHA256** з випадковою сіллю на користувача і
+  `PBKDF2_ITERATIONS = 200_000`. Формат зберігання:
+  `pbkdf2_sha256$<iterations>$<salt_hex>$<hash_hex>`. Не знижуйте
+  кількість ітерацій, не переходьте на голий sha256/MD5/сталую сіль;
+  `verify_password()` порівнює хеші тільки через `hmac.compare_digest`
+  (constant-time) — не замінюйте на `==`. Legacy-хеші v0.3.0 (голий
+  sha256) розпізнаються `is_legacy_hash()` і підтримуються лише для
+  логіну старих користувачів.
+- **Сесії**: `SESSION_TTL_SECONDS = 24*3600` — токен живе 24 години;
+  прострочені сесії вичищаються при кожній перевірці токена
+  (`get_user_by_token`). Не подовжуйте TTL «для зручності» і не робіть
+  токен вічним; logout — видалення рядка з `sessions`.
+- Перший користувач (`admin/admin123`) — fixture-пароль для демо; у
+  README так і написано «змініть пароль». Інших паролів у коді/тестах
+  не з'являється — `test_passwords_are_fixture_only` стежить.
+- `db.audit` логує **без** паролів і токенів; не пишіть у нього секрети.
+- Якщо додаєте ендпоінт — вирішіть свідомо: `current_user_info` чи
+  `require_admin` (див. матрицю вище); «забув перевірку» — це
+  вразливість, а не дрібниця.
 
 ## Приватність / Privacy
 
-Ніколи не додавайте до issue/PR: реальні бізнес-дані, шляхи з вашого диска,
-токени, паролі. Тестові паролі — тільки fixture-ові (`admin/admin123` у тестах).
-
-Never include in issues/PRs: real business data, local disk paths, tokens,
-passwords. Test passwords are fixture-only (`admin/admin123` in tests).
+Ніколи не додавайте до issue/PR: реальні бізнес-дані, шляхи з вашого
+диска, токени, паролі. Тестові паролі — тільки fixture-ові
+(`admin/admin123` у тестах).
 
 ## Локальний запуск / Local setup
 
@@ -63,4 +315,4 @@ python -m pytest tests/ -v
 python -m uvicorn app.main:app --reload
 ```
 
-Див. також [INSTALL.md](INSTALL.md). / See also [INSTALL.md](INSTALL.md).
+Див. також [INSTALL.md](INSTALL.md).
