@@ -89,7 +89,13 @@ pre { background:#0f172a; color:#e2e8f0; padding:10px; border-radius:6px; overfl
       <button id="vKanban" onclick="setView('kanban')">Канбан</button>
     </span>
     <div id="kanban"></div>
-    <table id="rowsTable"><thead><tr><th>Item</th><th>Qty</th><th>Статус</th><th>Виконавець</th><th>Дедлайн</th><th>Сума</th></tr></thead><tbody></tbody></table>
+    <div id="bulkBar" class="hidden" style="margin:8px 0">
+      Вибрано: <b id="bulkCount">0</b>
+      <select id="bulkStatus"><option value="">— новий статус —</option></select>
+      <button onclick="bulkStatusApply()">Змінити статус</button>
+      <button class="secondary" onclick="bulkDelete()">Видалити вибрані</button>
+    </div>
+    <table id="rowsTable"><thead><tr><th><input type="checkbox" id="selAll" onchange="toggleAll(this.checked)"></th><th>Item</th><th>Qty</th><th>Статус</th><th>Виконавець</th><th>Дедлайн</th><th>Сума</th></tr></thead><tbody></tbody></table>
     <h4>Журнал змін (audit)</h4>
     <div id="auditBox" class="muted"></div>
   </div>
@@ -188,6 +194,7 @@ async function openColl(id, name) {
   document.getElementById('rowsTitle').textContent = name;
   document.getElementById('rowsCard').classList.remove('hidden');
   fStatus.innerHTML = '<option value="">— статус —</option>' + ['new','in_progress','done','blocked'].map(s => `<option>${s}</option>`).join('');
+  document.getElementById('bulkStatus').innerHTML = '<option value="">— новий статус —</option>' + ['new','in_progress','done','blocked'].map(s => `<option>${s}</option>`).join('');
   fOverdue.value = ''; fQ.value = '';
   await loadSavedFilters();
   await loadRows();
@@ -246,7 +253,8 @@ async function loadRows() {
     const tr = document.createElement('tr');
     if (r.overdue) tr.className = 'overdue';
     const dd = r.due_date ? (r.overdue ? `<span class="badge-overdue">${r.due_date} ⚠ прострочено</span>` : r.due_date) : '';
-    tr.innerHTML = `<td contenteditable="true" data-id="${r.id}" data-field="item">${r.item ?? ''}</td>` +
+    tr.innerHTML = `<td><input type="checkbox" class="rowSel" data-id="${r.id}" onchange="updateBulkBar()"></td>` +
+      `<td contenteditable="true" data-id="${r.id}" data-field="item">${r.item ?? ''}</td>` +
       `<td contenteditable="true" data-id="${r.id}" data-field="quantity">${r.quantity ?? ''}</td>` +
       `<td><select onchange="setStatus(${r.id}, this.value)">${['','new','in_progress','done','blocked'].map(s => `<option ${s === r.status ? 'selected' : ''}>${s}</option>`).join('')}</select></td>` +
       `<td contenteditable="true" data-id="${r.id}" data-field="assignee">${r.assignee ?? ''}</td>` +
@@ -349,6 +357,39 @@ async function exportCsv() {
   a.download = `collection-${currentColl}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+// ---- Bulk actions: checkboxes -> mass status change / delete (audited per row)
+function selectedIds() {
+  return [...document.querySelectorAll('.rowSel:checked')].map(c => Number(c.dataset.id));
+}
+function toggleAll(on) {
+  document.querySelectorAll('.rowSel').forEach(c => c.checked = on);
+  updateBulkBar();
+}
+function updateBulkBar() {
+  const n = selectedIds().length;
+  document.getElementById('bulkBar').classList.toggle('hidden', n === 0);
+  document.getElementById('bulkCount').textContent = n;
+}
+async function bulkStatusApply() {
+  const status = document.getElementById('bulkStatus').value;
+  if (!status) { alert('Виберіть статус'); return; }
+  const ids = selectedIds();
+  if (!ids.length) return;
+  const d = await api('/api/rows/bulk', { method: 'POST', body: JSON.stringify({ ids, fields: { status } }) });
+  if (d.failed.length) alert('Не вдалося: ' + d.failed.map(f => f.id).join(', '));
+  document.getElementById('selAll').checked = false;
+  await Promise.all([loadRows(), currentView === 'kanban' ? loadKanban() : null]);
+}
+async function bulkDelete() {
+  const ids = selectedIds();
+  if (!ids.length || !confirm(`Видалити ${ids.length} рядків?`)) return;
+  try {
+    const d = await api('/api/rows/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) });
+    if (d.failed.length) alert('Не видалено: ' + d.failed.map(f => f.id).join(', '));
+  } catch (e) { alert(e.message); }
+  await Promise.all([loadRows(), currentView === 'kanban' ? loadKanban() : null]);
 }
 
 if (token) boot();

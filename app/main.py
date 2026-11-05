@@ -278,7 +278,7 @@ class RowUpdate(BaseModel):
 EDITABLE = {"item", "quantity", "status", "assignee", "due_date", "amount"}
 
 
-def _apply_row_update(conn, row_id: int, fields: dict, user: str) -> dict:
+def _apply_row_update(conn, row_id: int, fields: dict, user: str, commit: bool = True) -> dict:
     """Validate and apply field changes to one row; one audit event per changed field."""
     unknown = set(fields) - EDITABLE
     if unknown:
@@ -308,7 +308,8 @@ def _apply_row_update(conn, row_id: int, fields: dict, user: str) -> dict:
             field=field, old_value=str(old) if old is not None else None,
             new_value=str(coerced) if coerced is not None else None,
         )
-    conn.commit()
+    if commit:
+        conn.commit()
     return {
         "ok": True,
         "updated": {f: new for f, _o, new in changes},
@@ -328,6 +329,73 @@ def put_row(row_id: int, body: RowUpdate, conn=Depends(db.db), user: str = Depen
     if not body.fields:
         raise HTTPException(422, "Empty update: provide at least one field")
     return _apply_row_update(conn, row_id, body.fields, user)
+
+
+# ---------------------------------------------------------------- bulk actions
+
+BULK_LIMIT = 1000
+
+
+class BulkIn(BaseModel):
+    ids: list[int]
+    fields: dict[str, str | int | float | None]
+
+
+class BulkDeleteIn(BaseModel):
+    ids: list[int]
+
+
+@app.post("/api/rows/bulk")
+def bulk_update(body: BulkIn, conn=Depends(db.db), user: str = Depends(current_user)):
+    """Mass edit of selected rows (e.g. status change). One audit event per
+    changed field on every row. Invalid rows are reported per id."""
+    if not body.ids:
+        raise HTTPException(422, "No rows selected")
+    if len(body.ids) > BULK_LIMIT:
+        raise HTTPException(422, f"Too many rows (max {BULK_LIMIT} per request)")
+    unknown = set(body.fields) - EDITABLE
+    if unknown:
+        raise HTTPException(422, f"Fields not editable: {', '.join(sorted(unknown))}")
+    updated, failed = [], []
+    for row_id in body.ids:
+        try:
+            result = _apply_row_update(conn, row_id, body.fields, user, commit=False)
+            updated.append({"id": row_id, "values": result["values"]})
+        except HTTPException as exc:
+            failed.append({"id": row_id, "error": exc.detail})
+    conn.commit()
+    db.audit(
+        conn, user, "rows.bulk_updated", collection_id=None,
+        new_value=f"{len(updated)} rows: {', '.join(body.fields)}",
+    )
+    conn.commit()
+    return {"ok": True, "updated": updated, "failed": failed}
+
+
+@app.post("/api/rows/bulk-delete")
+def bulk_delete(body: BulkDeleteIn, conn=Depends(db.db), user: str = Depends(require_admin)):
+    """Delete selected rows (admin only). One audit event per deleted row."""
+    if not body.ids:
+        raise HTTPException(422, "No rows selected")
+    if len(body.ids) > BULK_LIMIT:
+        raise HTTPException(422, f"Too many rows (max {BULK_LIMIT} per request)")
+    deleted, failed = [], []
+    for row_id in body.ids:
+        row = conn.execute(
+            "SELECT id, collection_id, item FROM rows WHERE id = ?", (row_id,)
+        ).fetchone()
+        if row is None:
+            failed.append({"id": row_id, "error": "Row not found"})
+            continue
+        conn.execute("DELETE FROM rows WHERE id = ?", (row_id,))
+        db.audit(conn, user, "row.deleted", collection_id=row["collection_id"],
+                 row_id=row_id, old_value=row["item"])
+        deleted.append(row_id)
+    conn.commit()
+    db.audit(conn, user, "rows.bulk_deleted", collection_id=None,
+             new_value=f"{len(deleted)} rows deleted")
+    conn.commit()
+    return {"ok": True, "deleted": deleted, "failed": failed}
 
 
 @app.get("/api/collections/{cid}/audit")
