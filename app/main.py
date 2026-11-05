@@ -22,6 +22,7 @@ Routes:
   Tmpl    GET  /api/templates
           POST /api/collections/from-template      — admin
   Remind  POST /api/reminders/run, GET /api/reminders/outbox, POST /api/reminders/flush
+          POST /api/reminders/flush-telegram — digest of queued reminders to Telegram
 """
 import csv
 import io
@@ -888,6 +889,17 @@ def outbox(status: str | None = None, conn=Depends(db.db)):
 def flush_outbox(conn=Depends(db.db), user: str = Depends(require_admin)):
     """Send queued reminders. Without SHEETFLOW_SMTP_* config they are marked failed."""
     result = reminders.flush(conn)
+    return {"ok": True, **result}
+
+
+@app.post("/api/reminders/flush-telegram")
+def flush_telegram(conn=Depends(db.db), user: str = Depends(require_admin)):
+    """Send one digest of queued due-date reminders to Telegram.
+
+    Optional channel (roadmap v1.2): needs SHEETFLOW_TG_TOKEN and
+    SHEETFLOW_TG_CHAT_ID; without them the digest is reported as failed.
+    """
+    result = reminders.flush_telegram(conn)
     return {"ok": True, **result}
 
 

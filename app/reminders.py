@@ -8,6 +8,8 @@ otherwise entries stay queued (tests monkeypatch the sender).
 """
 import os
 import smtplib
+import urllib.parse
+import urllib.request
 from datetime import date, timedelta
 from email.message import EmailMessage
 
@@ -87,3 +89,58 @@ def flush(conn, sender=None) -> dict:
             failed += 1
     conn.commit()
     return {"sent": sent, "failed": failed}
+
+
+# ---------------------------------------------------------- telegram channel
+
+TELEGRAM_DIGEST_LIMIT = 20  # max lines per digest message
+
+
+def send_telegram(text: str) -> bool:
+    """Send one message to the configured Telegram chat (stdlib urllib).
+
+    Config: SHEETFLOW_TG_TOKEN (bot token) + SHEETFLOW_TG_CHAT_ID.
+    False = not configured or send failed — Telegram is optional, the email
+    outbox keeps working without it.
+    """
+    token = os.environ.get("SHEETFLOW_TG_TOKEN")
+    chat_id = os.environ.get("SHEETFLOW_TG_CHAT_ID")
+    if not token or not chat_id:
+        return False
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
+        req = urllib.request.Request(url, data=payload, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return 200 <= resp.status < 300
+    except Exception:
+        return False
+
+
+def telegram_digest(conn) -> str | None:
+    """Human-readable digest of the queued reminders (None = queue empty)."""
+    queued = conn.execute(
+        "SELECT recipient, subject FROM reminder_outbox WHERE status = 'queued' ORDER BY id"
+    ).fetchall()
+    if not queued:
+        return None
+    lines = [f"• {m['subject']} ({m['recipient'] or 'виконавця не призначено'})"
+             for m in queued[:TELEGRAM_DIGEST_LIMIT]]
+    more = len(queued) - TELEGRAM_DIGEST_LIMIT
+    if more > 0:
+        lines.append(f"… і ще {more}")
+    return f"SheetFlow: {len(queued)} нагадувань у черзі:\n" + "\n".join(lines)
+
+
+def flush_telegram(conn, sender=None) -> dict:
+    """Send the digest of queued reminders to Telegram. Returns {"sent", "failed", "queued"}.
+
+    Unlike the email outbox this is informational: outbox statuses belong to
+    the SMTP channel and are not changed here.
+    """
+    text = telegram_digest(conn)
+    if text is None:
+        return {"sent": 0, "failed": 0, "queued": 0}
+    ok = (sender or send_telegram)(text)
+    return {"sent": 1 if ok else 0, "failed": 0 if ok else 1, "queued": len(conn.execute(
+        "SELECT 1 FROM reminder_outbox WHERE status = 'queued'").fetchall())}

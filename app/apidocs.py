@@ -94,6 +94,9 @@ ENDPOINTS: list[dict] = [
     {"method": "POST", "path": "/api/reminders/flush", "role": "admin",
      "group": "Нагадування",
      "description": "Відправити чергу через SMTP (SHEETFLOW_SMTP_*); без конфіга — failed."},
+    {"method": "POST", "path": "/api/reminders/flush-telegram", "role": "admin",
+     "group": "Нагадування",
+     "description": "Дайджест нагадувань у Telegram (SHEETFLOW_TG_TOKEN + SHEETFLOW_TG_CHAT_ID), опційний канал."},
     # --- templates & demo
     {"method": "GET", "path": "/api/templates", "role": "—",
      "group": "Шаблони та демо", "description": "Класичні шаблони колекцій."},
