@@ -1,5 +1,10 @@
 # SheetFlow — Excel → App мігратор для малого бізнесу
 
+![tests](https://img.shields.io/badge/tests-48%20passing-brightgreen)
+![python](https://img.shields.io/badge/python-3.10%2B-blue)
+![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-0.1.0--alpha-orange)
+
 ## Проблема
 
 Малі бізнеси десятиліттями живуть в Excel — і продовжують жити, бо жоден готовий
@@ -16,29 +21,43 @@
 **Не змушувати міняти процес — імпортувати ЙОГО.**
 
 1. Завантажуєш свій звичний `.xlsx`.
-2. Майстер імпорту показує колонки — ти мапиш їх на сутності
-   (item, quantity, status, assignee, due_date, amount).
+2. Майстер імпорту **сам пропонує мапінг колонок** (fuzzy match за назвами,
+   укр/англ) — ти лише підтверджуєш або виправляєш; рядок-шапка визначається
+   автоматично або вибирається вручну.
 3. SheetFlow створює колекцію з валідацією типів і структурує хаос.
-4. Далі — список з фільтрами, зміна статусу, **audit log** (хто/коли/що змінив),
-   прострочені дедлайни підсвічені червоним, CSV-експорт назад у звичний світ.
+4. Далі — список з фільтрами, **inline-редагування всіх полів**, **audit log**
+   (хто/коли/що змінив), прострочені дедлайни підсвічені червоним,
+   CSV-експорт назад у звичний світ.
 
 Перший користувач системи автоматично стає адміном.
 
 ## Швидкий старт
 
 ```bash
-cd sheetflow
+git clone https://github.com/<user>/sheetflow.git && cd sheetflow
 python -m pip install -r requirements.txt
 python -m uvicorn app.main:app --reload    # http://127.0.0.1:8000
 ```
 
-Логін за замовчуванням: `admin / admin123` (перший користувач = адмін).
+**Демо-доступ:** `admin / admin123` (перший користувач = адмін;
+змініть пароль перед продакшеном).
 
-Тести:
+## Скріншоти
+
+> TODO: замінити плейсхолдери на реальні скріншоти
+
+| Майстер імпорту з авто-мапінгом | Таблиця з фільтрами та аудитом |
+|---|---|
+| ![import wizard](docs/screenshots/import-wizard.png) | ![rows view](docs/screenshots/rows-view.png) |
+
+## Тести
 
 ```bash
 python -m pytest tests/ -v
 ```
+
+CI: GitHub Actions проганяє тести на Python 3.12 і 3.13 на кожен push
+(`.github/workflows/tests.yml`).
 
 ## Стек
 
@@ -50,3 +69,14 @@ HTML + vanilla JS без build-кроку.
 | Змінна | Опис | За замовчуванням |
 |---|---|---|
 | `SHEETFLOW_DB` | шлях до SQLite-файлу | `sheetflow.db` поруч з проєктом |
+
+## Roadmap
+
+- [ ] Повторний імпорт (upsert за ключем)
+- [ ] Сповіщення email/Telegram про прострочені дедлайни
+- [ ] Ролі та багатокористувацьість
+- [ ] Інтеграції Google Sheets / 1C
+
+## Ліцензія
+
+[MIT](LICENSE)
