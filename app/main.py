@@ -92,6 +92,8 @@ async def upload(file: UploadFile, user: str = Depends(current_user)):
         "preview": parsed.preview,
         "total_rows": parsed.total_rows,
         "entity_fields": importer.ENTITY_FIELDS,
+        # Pre-filled mapping proposal — user sees it and can correct any column.
+        "suggested_mapping": importer.suggest_mapping(parsed.columns),
     }
 
 

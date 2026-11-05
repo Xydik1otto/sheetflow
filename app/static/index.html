@@ -97,12 +97,14 @@ async function upload() {
   if (!r.ok) { alert((await r.json()).detail); return; }
   const d = await r.json();
   uploadId = d.upload_id; columns = d.columns;
+  const suggested = d.suggested_mapping || {};
   const tb = document.querySelector('#mapTable tbody'); tb.innerHTML = '';
   columns.forEach(col => {
     const sample = d.preview[0] ? (d.preview[0][col] ?? '') : '';
+    const picked = suggested[col] || '';
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${col}</td><td class="muted">${sample}</td>` +
-      `<td><select data-col="${col}">${ENTITIES.map(e => `<option>${e}</option>`).join('')}</select></td>`;
+      `<td><select data-col="${col}">${ENTITIES.map(e => `<option ${e === picked ? 'selected' : ''}>${e}</option>`).join('')}</select></td>`;
     tb.appendChild(tr);
   });
   document.getElementById('step2').classList.remove('hidden');

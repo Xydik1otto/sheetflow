@@ -12,7 +12,64 @@ from datetime import date, datetime
 
 from openpyxl import load_workbook
 
+import difflib
+
 ENTITY_FIELDS = ["item", "quantity", "status", "assignee", "due_date", "amount"]
+
+# Best-effort suggestions for the import wizard: entity -> known column-name
+# synonyms (EN + UA). Matching is hybrid: exact = 1.0, substring = 0.85,
+# difflib.SequenceMatcher fuzzy ratio otherwise, threshold 0.6.
+FIELD_SYNONYMS = {
+    "item": ["item", "name", "товар", "назва", "найменування", "продукт", "product",
+             "послуга", "номенклатура", "заказ", "замовлення"],
+    "quantity": ["quantity", "qty", "к-сть", "кількість", "количество", "штук", "шт"],
+    "status": ["status", "статус", "стан", "state"],
+    "assignee": ["assignee", "виконавець", "виконавец", "executor", "хто", "who",
+                 "owner", "власник", "відповідальний", "assign"],
+    "due_date": ["due_date", "due", "deadline", "термін", "дедлайн", "term",
+                 "дата", "date", "due date", "срок"],
+    "amount": ["amount", "sum", "сума", "сумма", "ціна", "price", "cost",
+               "вартість", "total", "всього"],
+}
+
+SUGGEST_THRESHOLD = 0.6
+
+
+def suggest_mapping(columns: list[str], threshold: float = SUGGEST_THRESHOLD) -> dict[str, str]:
+    """Suggest {column_name -> entity_field} for the mapping wizard.
+
+    Hybrid scoring per (column, synonym): exact match = 1.0, substring
+    containment = 0.85, otherwise difflib.SequenceMatcher().ratio(). A column
+    is suggested for an entity only at/above `threshold`; assignments are
+    greedy one-to-one, highest score first, so a column never takes an entity
+    already claimed by a better match.
+    """
+    def score(norm_col: str, syn: str) -> float:
+        if norm_col == syn:
+            return 1.0
+        if syn and (syn in norm_col or norm_col in syn):
+            return 0.85
+        return difflib.SequenceMatcher(None, norm_col, syn).ratio()
+
+    candidates: list[tuple[float, str, str]] = []
+    for col in columns:
+        norm = str(col).strip().lower()
+        for entity, syns in FIELD_SYNONYMS.items():
+            best = max(score(norm, s) for s in syns)
+            if best >= threshold:
+                candidates.append((best, col, entity))
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    mapping: dict[str, str] = {}
+    used_cols: set[str] = set()
+    used_entities: set[str] = set()
+    for _, col, entity in candidates:
+        if col in used_cols or entity in used_entities:
+            continue
+        mapping[col] = entity
+        used_cols.add(col)
+        used_entities.add(entity)
+    return mapping
+
 
 # entity -> coercer. Returns (value, error_message). Defined after the coercers below.
 VALIDATORS = {}
@@ -165,7 +222,8 @@ def build_rows(data: bytes, mapping: dict[str, str]) -> tuple[list[dict], list[R
             i = col_index.get(col)
             return raw[i] if i is not None and i < len(raw) else None
 
-        typed, row_errors, has_any = {}, [], False
+        typed = {f: None for f in ENTITY_FIELDS}
+        row_errors, has_any = [], False
         for col, ent in mapping.items():
             value, err = VALIDATORS[ent](cell(col))
             typed[ent] = value
