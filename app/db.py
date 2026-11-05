@@ -77,6 +77,16 @@ CREATE TABLE IF NOT EXISTS reminder_outbox (
     sent_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS saved_filters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    filter_json TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(collection_id, name)
+);
+
 CREATE INDEX IF NOT EXISTS idx_rows_collection ON rows(collection_id);
 CREATE INDEX IF NOT EXISTS idx_audit_collection ON audit_events(collection_id);
 CREATE INDEX IF NOT EXISTS idx_audit_row ON audit_events(row_id);

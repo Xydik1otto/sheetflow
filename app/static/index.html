@@ -79,6 +79,11 @@ pre { background:#0f172a; color:#e2e8f0; padding:10px; border-radius:6px; overfl
     <input id="fQ" placeholder="Пошук...">
     <button class="secondary" onclick="loadRows()">Фільтрувати</button>
     <button class="secondary" onclick="exportCsv()">Експорт CSV</button>
+    <span style="margin-left:12px">
+      <select id="savedFilters" onchange="applySavedFilter(this.value)"><option value="">— збережені фільтри —</option></select>
+      <button class="secondary" onclick="saveFilter()">💾 Зберегти фільтр</button>
+      <button class="secondary" onclick="deleteFilter()">✖ Видалити фільтр</button>
+    </span>
     <span class="viewbtns">
       <button id="vTable" class="active" onclick="setView('table')">Таблиця</button>
       <button id="vKanban" onclick="setView('kanban')">Канбан</button>
@@ -183,7 +188,51 @@ async function openColl(id, name) {
   document.getElementById('rowsTitle').textContent = name;
   document.getElementById('rowsCard').classList.remove('hidden');
   fStatus.innerHTML = '<option value="">— статус —</option>' + ['new','in_progress','done','blocked'].map(s => `<option>${s}</option>`).join('');
+  fOverdue.value = ''; fQ.value = '';
+  await loadSavedFilters();
   await loadRows();
+  if (currentView === 'kanban') await loadKanban();
+}
+
+// ---- Saved (named) filters: sidebar of named views per collection
+let savedFilters = [];
+
+async function loadSavedFilters() {
+  savedFilters = await api(`/api/collections/${currentColl}/filters`);
+  const sel = document.getElementById('savedFilters');
+  sel.innerHTML = '<option value="">— збережені фільтри —</option>' +
+    savedFilters.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
+}
+
+function applySavedFilter(id) {
+  const f = savedFilters.find(x => String(x.id) === String(id));
+  if (!f) return;
+  fStatus.value = f.filters.status || '';
+  fOverdue.value = f.filters.overdue ? '1' : '';
+  fQ.value = f.filters.q || '';
+  loadRows();
+  if (currentView === 'kanban') loadKanban();
+}
+
+async function saveFilter() {
+  const name = prompt('Назва фільтра:');
+  if (!name) return;
+  const filters = {};
+  if (fStatus.value) filters.status = fStatus.value;
+  if (fOverdue.value) filters.overdue = true;
+  if (fQ.value) filters.q = fQ.value;
+  try {
+    await api(`/api/collections/${currentColl}/filters`, { method: 'POST', body: JSON.stringify({ name, filters }) });
+    await loadSavedFilters();
+    document.getElementById('savedFilters').value = [...document.getElementById('savedFilters').options].find(o => o.text === name)?.value || '';
+  } catch (e) { alert(e.message); }
+}
+
+async function deleteFilter() {
+  const id = document.getElementById('savedFilters').value;
+  if (!id) { alert('Виберіть фільтр зі списку'); return; }
+  await api('/api/filters/' + id, { method: 'DELETE' });
+  await loadSavedFilters();
 }
 
 async function loadRows() {

@@ -19,7 +19,9 @@ Routes:
 """
 import csv
 import io
+import json
 import os
+import sqlite3
 import uuid
 from datetime import date, timedelta
 
@@ -335,6 +337,67 @@ def audit_log(cid: int, limit: int = 200, conn=Depends(db.db), user: str = Depen
         (cid, limit),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ------------------------------------------------------- saved (named) filters
+
+FILTER_KEYS = {"status", "assignee", "overdue", "q"}
+
+
+class SavedFilterIn(BaseModel):
+    name: str
+    filters: dict[str, str | bool | int | None]
+
+
+@app.get("/api/collections/{cid}/filters")
+def list_filters(cid: int, conn=Depends(db.db), user: str = Depends(current_user)):
+    rows = conn.execute(
+        "SELECT id, name, filter_json, created_by, created_at FROM saved_filters "
+        "WHERE collection_id = ? ORDER BY id",
+        (cid,),
+    ).fetchall()
+    return [{**dict(r), "filters": json.loads(r["filter_json"])} for r in rows]
+
+
+@app.post("/api/collections/{cid}/filters")
+def save_filter(cid: int, body: SavedFilterIn, conn=Depends(db.db), user: str = Depends(current_user)):
+    coll = conn.execute("SELECT id FROM collections WHERE id = ?", (cid,)).fetchone()
+    if coll is None:
+        raise HTTPException(404, "Collection not found")
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "Filter name must not be empty")
+    clean = {k: v for k, v in body.filters.items() if k in FILTER_KEYS and v not in (None, "", False)}
+    if not clean:
+        raise HTTPException(422, "Filter is empty: set at least one of status/assignee/overdue/q")
+    try:
+        cur = conn.execute(
+            "INSERT INTO saved_filters (collection_id, name, filter_json, created_by, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (cid, name, json.dumps(clean, ensure_ascii=False), user, db.now_iso()),
+        )
+        fid = cur.lastrowid
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, f"Filter {name!r} already exists for this collection")
+    db.audit(conn, user, "filter.saved", collection_id=cid, new_value=f"{name}: {json.dumps(clean, ensure_ascii=False)}")
+    conn.commit()
+    return {"ok": True, "id": fid, "name": name, "filters": clean}
+
+
+@app.delete("/api/filters/{fid}")
+def delete_filter(fid: int, conn=Depends(db.db), info: dict = Depends(current_user_info)):
+    row = conn.execute(
+        "SELECT f.id, f.name, f.collection_id, f.created_by FROM saved_filters f WHERE f.id = ?", (fid,)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(404, "Filter not found")
+    if row["created_by"] != info["username"] and info["role"] != "admin":
+        raise HTTPException(403, "Only the author or an admin can delete this filter")
+    conn.execute("DELETE FROM saved_filters WHERE id = ?", (fid,))
+    db.audit(conn, info["username"], "filter.deleted", collection_id=row["collection_id"],
+             old_value=row["name"])
+    conn.commit()
+    return {"ok": True}
 
 
 # ------------------------------------------------------- calculated columns
