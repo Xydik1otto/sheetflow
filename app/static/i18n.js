@@ -46,6 +46,10 @@ const I18N = {
     reimport_result: "Повторний імпорт: +{ins} нових, {upd} оновлено, {skip} пропущено, помилок: {err}",
     users_h: "Користувачі та ролі", users_th_user: "Користувач", users_th_role: "Роль",
     users_th_created: "Створено", role_changed: "Роль {username} змінено на {role}",
+    api_docs_link: "REST API",
+    docs_tagline: "Довідник REST API — усі запити приймають і повертають JSON; авторизація через Bearer-токен із POST /api/login",
+    docs_back: "← до застосунку",
+    docs_hint: "Ролі: «—» — без авторизації, «увійдений» — будь-який користувач, «admin» — лише адміністратор. Джерело даних: GET /api/docs (JSON).",
   },
   en: {
     app_tagline: "Import your process, don't change it",
@@ -93,6 +97,10 @@ const I18N = {
     reimport_result: "Re-import: +{ins} inserted, {upd} updated, {skip} skipped, {err} errors",
     users_h: "Users & roles", users_th_user: "User", users_th_role: "Role",
     users_th_created: "Created", role_changed: "Role of {username} changed to {role}",
+    api_docs_link: "REST API",
+    docs_tagline: "REST API reference — every request takes and returns JSON; authorize with a Bearer token from POST /api/login",
+    docs_back: "← back to the app",
+    docs_hint: "Roles: \"—\" — no auth, \"logged in\" — any user, \"admin\" — administrators only. Data source: GET /api/docs (JSON).",
   },
 };
 

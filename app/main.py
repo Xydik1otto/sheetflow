@@ -17,6 +17,8 @@ Routes:
   Calc    GET/PUT /api/collections/{id}/formulas   — calculated columns (admin writes)
   Fields  GET/POST /api/collections/{id}/fields    — custom fields text/number/date/select
           DELETE /api/collections/{id}/fields/{fid}
+  Docs    GET  /api/docs                  — JSON catalog of all endpoints
+          GET  /api-docs                  — human-readable REST API reference page
   Tmpl    GET  /api/templates
           POST /api/collections/from-template      — admin
   Remind  POST /api/reminders/run, GET /api/reminders/outbox, POST /api/reminders/flush
@@ -34,7 +36,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import calc, db, importer, reminders, templates
+from . import apidocs, calc, db, importer, reminders, templates
 
 app = FastAPI(title="SheetFlow", version="1.0.0")
 
@@ -992,6 +994,18 @@ def load_demo(conn=Depends(db.db), user: str = Depends(require_admin)):
 @app.get("/")
 def index():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+
+@app.get("/api/docs")
+def api_docs():
+    """Machine-readable catalog of the REST API (rendered by /api-docs)."""
+    return apidocs.ENDPOINTS
+
+
+@app.get("/api-docs")
+def api_docs_page():
+    """Human-readable REST API reference (no build step, same style as the SPA)."""
+    return FileResponse(os.path.join(STATIC_DIR, "api-docs.html"))
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

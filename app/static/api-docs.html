@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>SheetFlow — REST API</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<meta name="description" content="Довідник REST API SheetFlow: ендпоінти, ролі, описи.">
+<style>
+:root { --accent:#2563eb; --bg:#f8fafc; --line:#e2e8f0; }
+* { box-sizing:border-box; }
+body { font-family:system-ui,Segoe UI,Arial,sans-serif; margin:0; background:var(--bg); color:#0f172a; }
+header { background:#fff; border-bottom:1px solid var(--line); padding:12px 24px; display:flex; gap:16px; align-items:center; }
+header h1 { font-size:18px; margin:0; color:var(--accent); }
+main { max-width:1100px; margin:24px auto; padding:0 16px; }
+h2 { margin:26px 0 8px; font-size:16px; color:#1e293b; }
+table { width:100%; border-collapse:collapse; font-size:14px; background:#fff; border:1px solid var(--line); border-radius:8px; }
+th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { background:#f1f5f9; }
+code { background:#eef2ff; border-radius:4px; padding:1px 5px; font-size:13px; }
+.m { font-weight:700; font-size:12px; }
+.m.POST { color:#059669; } .m.GET { color:#2563eb; } .m.PATCH { color:#d97706; }
+.m.PUT { color:#d97706; } .m.DELETE { color:#dc2626; }
+.role { display:inline-block; background:#fef3c7; border-radius:10px; padding:1px 8px; font-size:12px; }
+.muted { color:#64748b; font-size:12px; }
+:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SheetFlow API</h1>
+  <span class="muted" data-i18n="docs_tagline">Довідник REST API — усі запити приймають і повертають JSON; авторизація через Bearer-токен із POST /api/login</span>
+  <a href="/" style="margin-left:auto" data-i18n="docs_back">← до застосунку</a>
+</header>
+<main>
+  <p class="muted" data-i18n="docs_hint">Ролі: <code>—</code> — без авторизації, <code>увійдений</code> — будь-який користувач, <code>admin</code> — лише адміністратор. Джерело даних: <code>GET /api/docs</code> (JSON).</p>
+  <div id="docs"></div>
+</main>
+<script src="/static/i18n.js"></script>
+<script>
+applyI18n();
+const GROUP_ORDER = ["Авторизація", "Користувачі та ролі", "Імпорт", "Дані", "Фільтри",
+                     "Поля та формули", "Експорт", "Нагадування", "Шаблони та демо", "Документація"];
+(async () => {
+  const eps = await (await fetch('/api/docs')).json();
+  const groups = [...new Set([...GROUP_ORDER, ...eps.map(e => e.group)])];
+  const root = document.getElementById('docs');
+  groups.forEach(g => {
+    const rows = eps.filter(e => e.group === g);
+    if (!rows.length) return;
+    const h = document.createElement('h2'); h.textContent = g; root.appendChild(h);
+    const t = document.createElement('table');
+    t.innerHTML = '<thead><tr><th>Method</th><th>Path</th><th>Роль</th><th>Опис</th></tr></thead>';
+    const tb = document.createElement('tbody');
+    rows.forEach(e => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td><span class="m ${e.method}">${e.method}</span></td>` +
+        `<td><code>${e.path}</code></td><td><span class="role">${e.role}</span></td><td>${e.description}</td>`;
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb); root.appendChild(t);
+  });
+})();
+</script>
+</body>
+</html>

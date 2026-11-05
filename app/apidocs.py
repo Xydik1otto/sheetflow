@@ -1,0 +1,106 @@
+"""Machine-readable catalog of the SheetFlow REST API (shown on /api-docs).
+
+One entry per route: method, path, required role and a short description.
+The docs page renders this list, so it can never drift far from the code —
+adding a route here is part of adding the route itself.
+"""
+
+# (method, path, role, description)
+ENDPOINTS: list[dict] = [
+    # --- auth
+    {"method": "POST", "path": "/api/login", "role": "—",
+     "group": "Авторизація",
+     "description": "Отримати session-токен за логіном і паролем (Bearer)."},
+    {"method": "POST", "path": "/api/logout", "role": "—",
+     "group": "Авторизація",
+     "description": "Анулювати поточний session-токен (вихід)."},
+    {"method": "GET", "path": "/api/me", "role": "—",
+     "group": "Авторизація",
+     "description": "Хто я: username, роль, список статусів."},
+    {"method": "GET", "path": "/api/health", "role": "—",
+     "group": "Авторизація",
+     "description": "Перевірка живості сервісу (без авторизації)."},
+    # --- users & roles
+    {"method": "GET", "path": "/api/users", "role": "admin",
+     "group": "Користувачі та ролі", "description": "Список користувачів з ролями."},
+    {"method": "POST", "path": "/api/users", "role": "admin",
+     "group": "Користувачі та ролі",
+     "description": "Створити користувача (username, password, role)."},
+    {"method": "PATCH", "path": "/api/users/{id}", "role": "admin",
+     "group": "Користувачі та ролі",
+     "description": "Змінити роль користувача (admin/worker); останнього адміна знизити не можна."},
+    # --- import
+    {"method": "POST", "path": "/api/import/upload", "role": "admin",
+     "group": "Імпорт",
+     "description": "Розібрати .xlsx/.csv: колонки, прев'ю, авто-мапінг, аркуші, рядок-шапка."},
+    {"method": "POST", "path": "/api/import/map", "role": "admin",
+     "group": "Імпорт",
+     "description": "Створити колекцію з мапінгу колонок на сутності."},
+    {"method": "POST", "path": "/api/collections/{id}/reimport", "role": "admin",
+     "group": "Імпорт",
+     "description": "Повторний імпорт у наявну колекцію, upsert за ключем (за замовчуванням item); порожні клітинки не затирають дані."},
+    {"method": "POST", "path": "/api/collections/from-template", "role": "admin",
+     "group": "Імпорт",
+     "description": "Створити колекцію з класичного шаблону (orders/clients/inventory) з демо-рядками."},
+    # --- data
+    {"method": "GET", "path": "/api/collections", "role": "увійдений",
+     "group": "Дані", "description": "Список колекцій з кількістю рядків."},
+    {"method": "GET", "path": "/api/collections/{id}/rows", "role": "увійдений",
+     "group": "Дані",
+     "description": "Рядки колекції; фільтри: status, assignee, overdue, q (пошук)."},
+    {"method": "PATCH", "path": "/api/rows/{id}", "role": "увійдений",
+     "group": "Дані", "description": "Змінити одне поле рядка (з аудитом)."},
+    {"method": "PUT", "path": "/api/rows/{id}", "role": "увійдений",
+     "group": "Дані", "description": "Рядкове редагування: кілька полів одним запитом."},
+    {"method": "POST", "path": "/api/rows/bulk", "role": "увійдений",
+     "group": "Дані", "description": "Масова зміна полів для вибраних рядків (до 1000)."},
+    {"method": "POST", "path": "/api/rows/bulk-delete", "role": "admin",
+     "group": "Дані", "description": "Видалити вибрані рядки (з аудитом кожного)."},
+    {"method": "DELETE", "path": "/api/collections/{id}", "role": "admin",
+     "group": "Дані", "description": "Видалити колекцію повністю (з аудитом)."},
+    {"method": "GET", "path": "/api/collections/{id}/audit", "role": "admin",
+     "group": "Дані", "description": "Журнал змін колекції: хто/коли/що змінив."},
+    # --- filters
+    {"method": "GET", "path": "/api/collections/{id}/filters", "role": "увійдений",
+     "group": "Фільтри", "description": "Збережені (іменовані) фільтри колекції."},
+    {"method": "POST", "path": "/api/collections/{id}/filters", "role": "увійдений",
+     "group": "Фільтри", "description": "Зберегти поточний фільтр під іменем."},
+    {"method": "DELETE", "path": "/api/filters/{id}", "role": "автор або admin",
+     "group": "Фільтри", "description": "Видалити збережений фільтр."},
+    # --- custom fields & formulas
+    {"method": "GET", "path": "/api/collections/{id}/fields", "role": "увійдений",
+     "group": "Поля та формули", "description": "Користувацькі поля колекції."},
+    {"method": "POST", "path": "/api/collections/{id}/fields", "role": "admin",
+     "group": "Поля та формули",
+     "description": "Додати користувацьке поле: text/number/date/select."},
+    {"method": "DELETE", "path": "/api/collections/{id}/fields/{fid}", "role": "admin",
+     "group": "Поля та формули", "description": "Видалити поле разом із значеннями."},
+    {"method": "GET", "path": "/api/collections/{id}/formulas", "role": "увійдений",
+     "group": "Поля та формули", "description": "Обчислювані колонки колекції."},
+    {"method": "PUT", "path": "/api/collections/{id}/formulas", "role": "admin",
+     "group": "Поля та формули",
+     "description": "Задати формули, напр. {\"total\": \"=quantity*amount\"}; цикли відхилено."},
+    # --- export
+    {"method": "GET", "path": "/api/collections/{id}/export.csv", "role": "увійдений",
+     "group": "Експорт", "description": "CSV з BOM — коректно відкривається в Excel."},
+    {"method": "GET", "path": "/api/export/json", "role": "увійдений",
+     "group": "Експорт", "description": "Повний бекап: усі колекції, рядки, поля, формули, фільтри."},
+    # --- reminders
+    {"method": "POST", "path": "/api/reminders/run", "role": "admin",
+     "group": "Нагадування",
+     "description": "Поставити в чергу нагадування по due_date (прострочені + найближчі, idempotent)."},
+    {"method": "GET", "path": "/api/reminders/outbox", "role": "увійдений",
+     "group": "Нагадування", "description": "Черга нагадувань (queued/sent/failed)."},
+    {"method": "POST", "path": "/api/reminders/flush", "role": "admin",
+     "group": "Нагадування",
+     "description": "Відправити чергу через SMTP (SHEETFLOW_SMTP_*); без конфіга — failed."},
+    # --- templates & demo
+    {"method": "GET", "path": "/api/templates", "role": "—",
+     "group": "Шаблони та демо", "description": "Класичні шаблони колекцій."},
+    {"method": "POST", "path": "/api/demo", "role": "admin",
+     "group": "Шаблони та демо",
+     "description": "Демо-колекція з користувацькими полями та формулами (opt-in)."},
+    # --- docs
+    {"method": "GET", "path": "/api/docs", "role": "—",
+     "group": "Документація", "description": "Цей каталог ендпоінтів у форматі JSON."},
+]
