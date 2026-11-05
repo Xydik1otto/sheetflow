@@ -22,7 +22,7 @@ from fastapi import Depends, FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from . import calc, db, importer
+from . import calc, db, importer, reminders
 
 app = FastAPI(title="SheetFlow", version="0.1.0")
 
@@ -338,6 +338,37 @@ def export_csv(cid: int, conn=Depends(db.db)):
 @app.get("/api/health")
 def health():
     return {"ok": True}
+
+
+# ------------------------------------------------------------- reminders
+
+
+class RemindersRunIn(BaseModel):
+    days_before: int = 3
+
+
+@app.post("/api/reminders/run")
+def run(body: RemindersRunIn, conn=Depends(db.db), user: str = Depends(current_user)):
+    """Queue due-date reminders (overdue + within days_before; done excluded). Idempotent."""
+    created = reminders.run_reminders(conn, days_before=body.days_before)
+    return {"ok": True, "created": created}
+
+
+@app.get("/api/reminders/outbox")
+def outbox(status: str | None = None, conn=Depends(db.db)):
+    sql = "SELECT * FROM reminder_outbox ORDER BY id DESC"
+    params: list = []
+    if status:
+        sql = "SELECT * FROM reminder_outbox WHERE status = ? ORDER BY id DESC"
+        params.append(status)
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+@app.post("/api/reminders/flush")
+def flush_outbox(conn=Depends(db.db), user: str = Depends(current_user)):
+    """Send queued reminders. Without SHEETFLOW_SMTP_* config they are marked failed."""
+    result = reminders.flush(conn)
+    return {"ok": True, **result}
 
 
 @app.get("/")

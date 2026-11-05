@@ -61,9 +61,23 @@ CREATE TABLE IF NOT EXISTS audit_events (
     new_value TEXT
 );
 
+CREATE TABLE IF NOT EXISTS reminder_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    collection_id INTEGER,
+    row_id INTEGER,
+    due_date TEXT,
+    recipient TEXT,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    sent_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_rows_collection ON rows(collection_id);
 CREATE INDEX IF NOT EXISTS idx_audit_collection ON audit_events(collection_id);
 CREATE INDEX IF NOT EXISTS idx_audit_row ON audit_events(row_id);
+CREATE INDEX IF NOT EXISTS idx_outbox_row ON reminder_outbox(row_id, due_date);
 """
 
 # Columns added after the initial MVP schema (checked/applied by init_db).
