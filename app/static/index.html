@@ -224,7 +224,16 @@ document.getElementById('rowsTable').addEventListener('keydown', e => {
   }
 });
 
-function exportCsv() { window.open(`/api/collections/${currentColl}/export.csv`, '_blank'); }
+async function exportCsv() {
+  const r = await fetch(`/api/collections/${currentColl}/export.csv`, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) { alert('Помилка експорту'); return; }
+  const blob = await r.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `collection-${currentColl}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
 
 if (token) boot();
 </script>

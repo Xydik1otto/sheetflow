@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'admin',
     is_admin INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
@@ -83,6 +84,7 @@ CREATE INDEX IF NOT EXISTS idx_outbox_row ON reminder_outbox(row_id, due_date);
 # Columns added after the initial MVP schema (checked/applied by init_db).
 MIGRATIONS = {
     "collections": {"calc_json": "ALTER TABLE collections ADD COLUMN calc_json TEXT"},
+    "users": {"role": "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'"},
 }
 
 DEFAULT_STATUSES = ["new", "in_progress", "done", "blocked"]
@@ -135,9 +137,37 @@ def ensure_admin(conn: sqlite3.Connection, username: str = "admin", password: st
         return
     pw_hash = hashlib.sha256(password.encode()).hexdigest()
     conn.execute(
-        "INSERT INTO users (username, password_hash, is_admin, created_at) VALUES (?, ?, 1, ?)",
+        "INSERT INTO users (username, password_hash, role, is_admin, created_at) VALUES (?, ?, 'admin', 1, ?)",
         (username, pw_hash, now_iso()),
     )
+
+
+def create_user(conn: sqlite3.Connection, username: str, password: str, role: str = "worker") -> int:
+    """Create a user with a role ('admin' | 'worker'). Raises ValueError on duplicates/bad role."""
+    import hashlib
+
+    if role not in ROLES:
+        raise ValueError(f"Unknown role {role!r}; available: {', '.join(ROLES)}")
+    if conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
+        raise ValueError(f"User {username!r} already exists")
+    pw_hash = hashlib.sha256(password.encode()).hexdigest()
+    cur = conn.execute(
+        "INSERT INTO users (username, password_hash, role, is_admin, created_at) VALUES (?, ?, ?, ?, ?)",
+        (username, pw_hash, role, 1 if role == "admin" else 0, now_iso()),
+    )
+    return cur.lastrowid
+
+
+def get_user_by_token(conn: sqlite3.Connection, token: str) -> sqlite3.Row | None:
+    """Resolve a session bearer token to its user row."""
+    return conn.execute(
+        "SELECT u.id, u.username, u.role FROM sessions s JOIN users u ON u.id = s.user_id "
+        "WHERE s.token = ?",
+        (token,),
+    ).fetchone()
+
+
+ROLES = ("admin", "worker")
 
 
 def audit(conn: sqlite3.Connection, user: str, action: str, collection_id: int | None = None,

@@ -2,15 +2,20 @@
 
 Routes:
   UI      GET /                     — single-page UI (vanilla JS, no build step)
-  Auth    POST /api/login           — sets session cookie
+  Auth    POST /api/login           — sets session token (roles: admin, worker)
           GET  /api/me
-  Import  POST /api/import/upload   — parse xlsx, return columns + preview
-          POST /api/import/map      — create collection from column mapping
+          GET/POST /api/users       — user management (admin only)
+  Import  POST /api/import/upload   — parse xlsx (admin)
+          POST /api/import/map      — create collection from column mapping (admin)
   Data    GET  /api/collections
           GET  /api/collections/{id}/rows      — filters: status, assignee, overdue
-          PATCH /api/rows/{id}                — change a field (audited)
-          GET  /api/collections/{id}/audit
+          PATCH/PUT /api/rows/{id}            — edit fields (audited; workers may edit)
+          GET  /api/collections/{id}/audit    — admin only
           GET  /api/collections/{id}/export.csv
+  Calc    GET/PUT /api/collections/{id}/formulas   — calculated columns (admin writes)
+  Tmpl    GET  /api/templates
+          POST /api/collections/from-template      — admin
+  Remind  POST /api/reminders/run, GET /api/reminders/outbox, POST /api/reminders/flush
 """
 import csv
 import io
@@ -18,7 +23,7 @@ import os
 import uuid
 from datetime import date, timedelta
 
-from fastapi import Depends, FastAPI, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
@@ -35,8 +40,25 @@ _uploads: dict[str, tuple[str, bytes, importer.SheetParse]] = {}
 # ---------------------------------------------------------------- auth
 
 
-def current_user(conn=Depends(db.db)) -> str:
-    return "admin"  # single-admin MVP: every action is attributed to the admin user
+def current_user_info(conn=Depends(db.db), authorization: str | None = Header(None)) -> dict:
+    """Resolve the Bearer token to {username, role}. All API routes require it."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Not authenticated: login via POST /api/login")
+    user = db.get_user_by_token(conn, authorization[len("Bearer "):].strip())
+    if user is None:
+        raise HTTPException(401, "Invalid session token (login again)")
+    return {"username": user["username"], "role": user["role"]}
+
+
+def current_user(info: dict = Depends(current_user_info)) -> str:
+    return info["username"]
+
+
+def require_admin(info: dict = Depends(current_user_info)) -> str:
+    """Admin-only operations: import, audit log, user management, reminders."""
+    if info["role"] != "admin":
+        raise HTTPException(403, "Admin role required")
+    return info["username"]
 
 
 @app.on_event("startup")
@@ -56,7 +78,7 @@ def login(body: LoginIn, conn=Depends(db.db)):
     import hashlib
 
     row = conn.execute(
-        "SELECT id, password_hash FROM users WHERE username = ?", (body.username,)
+        "SELECT id, password_hash, role FROM users WHERE username = ?", (body.username,)
     ).fetchone()
     if row is None or row["password_hash"] != hashlib.sha256(body.password.encode()).hexdigest():
         raise HTTPException(401, "Invalid username or password")
@@ -66,12 +88,38 @@ def login(body: LoginIn, conn=Depends(db.db)):
         (token, row["id"], db.now_iso()),
     )
     conn.commit()
-    return {"ok": True, "token": token, "username": body.username}
+    return {"ok": True, "token": token, "username": body.username, "role": row["role"]}
 
 
 @app.get("/api/me")
-def me(user: str = Depends(current_user)):
-    return {"user": user, "statuses": db.DEFAULT_STATUSES}
+def me(info: dict = Depends(current_user_info)):
+    return {"user": info["username"], "role": info["role"], "statuses": db.DEFAULT_STATUSES}
+
+
+# ---------------------------------------------------------- user management
+
+
+class UserIn(BaseModel):
+    username: str
+    password: str
+    role: str = "worker"  # 'admin' | 'worker'
+
+
+@app.get("/api/users")
+def list_users(conn=Depends(db.db), user: str = Depends(require_admin)):
+    rows = conn.execute("SELECT id, username, role, created_at FROM users ORDER BY id").fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/users")
+def add_user(body: UserIn, conn=Depends(db.db), user: str = Depends(require_admin)):
+    try:
+        new_id = db.create_user(conn, body.username, body.password, body.role)
+    except ValueError as exc:
+        raise HTTPException(409 if "already exists" in str(exc) else 422, str(exc))
+    db.audit(conn, user, "user.created", new_value=f"{body.username} ({body.role})")
+    conn.commit()
+    return {"ok": True, "id": new_id, "username": body.username, "role": body.role}
 
 
 # ---------------------------------------------------------------- import wizard
@@ -79,7 +127,7 @@ def me(user: str = Depends(current_user)):
 
 @app.post("/api/import/upload")
 async def upload(file: UploadFile, header_row: int | None = Form(None),
-                 user: str = Depends(current_user)):
+                 user: str = Depends(require_admin)):
     """Parse the xlsx. header_row: 1-based manual header selection; omitted = auto-detect."""
     data = await file.read()
     try:
@@ -108,7 +156,7 @@ class MapIn(BaseModel):
 
 
 @app.post("/api/import/map")
-def map_columns(body: MapIn, conn=Depends(db.db), user: str = Depends(current_user)):
+def map_columns(body: MapIn, conn=Depends(db.db), user: str = Depends(require_admin)):
     staged = _uploads.get(body.upload_id)
     if staged is None:
         raise HTTPException(404, "Unknown upload_id (re-upload the file)")
@@ -152,7 +200,7 @@ def map_columns(body: MapIn, conn=Depends(db.db), user: str = Depends(current_us
 
 
 @app.get("/api/collections")
-def list_collections(conn=Depends(db.db)):
+def list_collections(conn=Depends(db.db), user: str = Depends(current_user)):
     rows = conn.execute(
         "SELECT c.id, c.name, c.source_file, c.created_at, c.created_by, "
         "(SELECT COUNT(*) FROM rows r WHERE r.collection_id = c.id) AS row_count "
@@ -261,7 +309,7 @@ def put_row(row_id: int, body: RowUpdate, conn=Depends(db.db), user: str = Depen
 
 
 @app.get("/api/collections/{cid}/audit")
-def audit_log(cid: int, limit: int = 200, conn=Depends(db.db)):
+def audit_log(cid: int, limit: int = 200, conn=Depends(db.db), user: str = Depends(require_admin)):
     rows = conn.execute(
         "SELECT * FROM audit_events WHERE collection_id = ? ORDER BY id DESC LIMIT ?",
         (cid, limit),
@@ -285,7 +333,7 @@ def get_formulas(cid: int, conn=Depends(db.db)):
 
 
 @app.put("/api/collections/{cid}/formulas")
-def put_formulas(cid: int, body: FormulasIn, conn=Depends(db.db), user: str = Depends(current_user)):
+def put_formulas(cid: int, body: FormulasIn, conn=Depends(db.db), user: str = Depends(require_admin)):
     """Define derived (calculated) columns, e.g. {"total": "=quantity*amount"}."""
     coll = conn.execute("SELECT id FROM collections WHERE id = ?", (cid,)).fetchone()
     if coll is None:
@@ -311,7 +359,7 @@ def put_formulas(cid: int, body: FormulasIn, conn=Depends(db.db), user: str = De
 
 
 @app.get("/api/collections/{cid}/export.csv")
-def export_csv(cid: int, conn=Depends(db.db)):
+def export_csv(cid: int, conn=Depends(db.db), user: str = Depends(current_user)):
     coll = conn.execute("SELECT * FROM collections WHERE id = ?", (cid,)).fetchone()
     if coll is None:
         raise HTTPException(404, "Collection not found")
@@ -348,7 +396,7 @@ class RemindersRunIn(BaseModel):
 
 
 @app.post("/api/reminders/run")
-def run(body: RemindersRunIn, conn=Depends(db.db), user: str = Depends(current_user)):
+def run(body: RemindersRunIn, conn=Depends(db.db), user: str = Depends(require_admin)):
     """Queue due-date reminders (overdue + within days_before; done excluded). Idempotent."""
     created = reminders.run_reminders(conn, days_before=body.days_before)
     return {"ok": True, "created": created}
@@ -365,7 +413,7 @@ def outbox(status: str | None = None, conn=Depends(db.db)):
 
 
 @app.post("/api/reminders/flush")
-def flush_outbox(conn=Depends(db.db), user: str = Depends(current_user)):
+def flush_outbox(conn=Depends(db.db), user: str = Depends(require_admin)):
     """Send queued reminders. Without SHEETFLOW_SMTP_* config they are marked failed."""
     result = reminders.flush(conn)
     return {"ok": True, **result}
@@ -388,7 +436,7 @@ def list_templates():
 
 
 @app.post("/api/collections/from-template")
-def from_template(body: FromTemplateIn, conn=Depends(db.db), user: str = Depends(current_user)):
+def from_template(body: FromTemplateIn, conn=Depends(db.db), user: str = Depends(require_admin)):
     """Create a collection from a classic template (orders/clients/inventory),
     pre-filled with its sample rows — one click, no file needed."""
     t = templates.TEMPLATES.get(body.template)
