@@ -23,8 +23,12 @@ button.secondary { background:#64748b; }
 select, input { padding:6px 8px; border:1px solid var(--line); border-radius:6px; }
 table { width:100%; border-collapse:collapse; font-size:14px; }
 th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+th { color:#1e293b; }
 tr.overdue td { background:#fee2e2; }
-.badge-overdue { color:var(--danger); font-weight:600; }
+.badge-overdue { color:#b91c1c; font-weight:600; }
+:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline:2px solid #1d4ed8; outline-offset:1px; }
+[contenteditable]:focus { outline:2px solid var(--accent); outline-offset:-1px; background:#fffbeb; }
 .muted { color:#64748b; font-size:12px; }
 .hidden { display:none; }
 pre { background:#0f172a; color:#e2e8f0; padding:10px; border-radius:6px; overflow:auto; font-size:12px; }
@@ -79,7 +83,7 @@ td select { min-width:90px; }
     <input id="collName" data-i18n-ph="ph_coll_name" placeholder="Назва, напр. Замовлення" aria-label="Назва колекції">
     <table id="mapTable"><thead><tr><th data-i18n="col_file">Колонка з файлу</th><th data-i18n="col_sample">Приклад</th><th data-i18n="col_entity">Сутність</th></tr></thead><tbody></tbody></table>
     <button onclick="doMap()" data-i18n="create_coll_btn">Створити колекцію</button>
-    <div id="mapResult"></div>
+    <div id="mapResult" role="status" aria-live="polite"></div>
   </div>
 
   <div class="card hidden" id="listCard">
@@ -111,7 +115,7 @@ td select { min-width:90px; }
     </span>
     <div id="kanban"></div>
     <div id="bulkBar" class="hidden" style="margin:8px 0">
-      <span data-i18n="selected_n">Вибрано:</span> <b id="bulkCount">0</b>
+      <span data-i18n="selected_n">Вибрано:</span> <b id="bulkCount" role="status" aria-live="polite">0</b>
       <select id="bulkStatus" aria-label="Новий статус для вибраних"><option value="">— новий статус —</option></select>
       <button onclick="bulkStatusApply()" data-i18n="bulk_status_btn">Змінити статус</button>
       <button class="secondary" onclick="bulkDelete()" data-i18n="bulk_delete_btn">Видалити вибрані</button>
@@ -533,6 +537,11 @@ async function bulkDelete() {
   } catch (e) { alert(e.message); }
   await Promise.all([loadRows(), currentView === 'kanban' ? loadKanban() : null]);
 }
+
+// Keyboard navigation in the key flows: Enter submits login / mapping.
+document.getElementById('u').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+document.getElementById('p').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+document.getElementById('collName').addEventListener('keydown', e => { if (e.key === 'Enter') doMap(); });
 
 if (token) boot();
 </script>
