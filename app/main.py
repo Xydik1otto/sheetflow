@@ -27,6 +27,7 @@ from datetime import date, timedelta
 
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import calc, db, importer, reminders, templates
@@ -631,3 +632,6 @@ def from_template(body: FromTemplateIn, conn=Depends(db.db), user: str = Depends
 @app.get("/")
 def index():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
