@@ -49,80 +49,94 @@ td select { min-width:90px; }
 <body>
 <header>
   <h1>SheetFlow</h1>
-  <span class="muted">Імпортуйте свій процес, а не міняйте його</span>
+  <span class="muted" data-i18n="app_tagline">Імпортуйте свій процес, а не міняйте його</span>
+  <span style="margin-left:auto">
+    <select id="langSel" aria-label="Мова / Language" onchange="setLang(this.value)">
+      <option value="ua">UA</option><option value="en">EN</option>
+    </select>
+  </span>
 </header>
 <main>
   <div class="card" id="loginCard">
-    <h3>Вхід</h3>
-    <input id="u" placeholder="Логін (admin)"> <input id="p" type="password" placeholder="Пароль">
-    <button onclick="login()">Увійти</button>
-    <span class="muted">Перший користувач — admin/admin123 (змініть пароль у БД)</span>
+    <h3 data-i18n="login_h">Вхід</h3>
+    <input id="u" data-i18n-ph="ph_user" placeholder="Логін (admin)"> <input id="p" type="password" data-i18n-ph="ph_pass" placeholder="Пароль">
+    <button onclick="login()" data-i18n="login_btn">Увійти</button>
+    <span class="muted" data-i18n="login_hint">Перший користувач — admin/admin123 (змініть пароль у БД)</span>
   </div>
 
   <div class="card hidden" id="step1">
-    <h3>1. Завантажте ваш .xlsx або .csv</h3>
-    <input type="file" id="file" accept=".xlsx,.csv">
-    <button onclick="upload()">Аналізувати</button>
+    <h3 data-i18n="step1_h">1. Завантажте ваш .xlsx або .csv</h3>
+    <input type="file" id="file" accept=".xlsx,.csv" aria-label="Файл .xlsx або .csv">
+    <button onclick="upload()" data-i18n="upload_btn">Аналізувати</button>
   </div>
 
   <div class="card hidden" id="step2">
-    <h3>2. Назвіть колекцію та змапте колонки</h3>
-    <span id="sheetBox" class="hidden"><label>Аркуш: <select id="sheetSel" onchange="upload(null, this.value)" aria-label="Аркуш Excel"></select></label></span>
-    <label>Рядок-шапка: <select id="hdrRow" onchange="upload(this.value, lastSheet)" aria-label="Рядок-шапка"></select></label>
-    <input id="collName" placeholder="Назва, напр. Замовлення">
-    <table id="mapTable"><thead><tr><th>Колонка з файлу</th><th>Приклад</th><th>Сутність</th></tr></thead><tbody></tbody></table>
-    <button onclick="doMap()">Створити колекцію</button>
+    <h3 data-i18n="step2_h">2. Назвіть колекцію та змапте колонки</h3>
+    <span id="sheetBox" class="hidden"><label data-i18n="sheet_label">Аркуш:</label> <select id="sheetSel" onchange="upload(null, this.value)" aria-label="Аркуш Excel"></select></span>
+    <label><span data-i18n="header_row_label">Рядок-шапка:</span> <select id="hdrRow" onchange="upload(this.value, lastSheet)" aria-label="Рядок-шапка"></select></label>
+    <input id="collName" data-i18n-ph="ph_coll_name" placeholder="Назва, напр. Замовлення" aria-label="Назва колекції">
+    <table id="mapTable"><thead><tr><th data-i18n="col_file">Колонка з файлу</th><th data-i18n="col_sample">Приклад</th><th data-i18n="col_entity">Сутність</th></tr></thead><tbody></tbody></table>
+    <button onclick="doMap()" data-i18n="create_coll_btn">Створити колекцію</button>
     <div id="mapResult"></div>
   </div>
 
   <div class="card hidden" id="listCard">
-    <h3>Колекції</h3>
+    <h3 data-i18n="collections_h">Колекції</h3>
     <div style="margin-bottom:10px">
-      <select id="tplSelect"></select>
-      <button class="secondary" onclick="createFromTemplate()">Створити з шаблону</button>
-      <span class="muted">або імпортуйте файл нижче ↓</span>
+      <select id="tplSelect" aria-label="Шаблон колекції"></select>
+      <button class="secondary" onclick="createFromTemplate()" data-i18n="tpl_btn">Створити з шаблону</button>
+      <span class="muted" data-i18n="tpl_or">або імпортуйте файл нижче ↓</span>
     </div>
-    <table id="collTable"><thead><tr><th>#</th><th>Назва</th><th>Файл</th><th>Рядків</th><th>Створено</th><th></th></tr></thead><tbody></tbody></table>
+    <table id="collTable"><thead><tr><th data-i18n="th_id">#</th><th data-i18n="th_name">Назва</th><th data-i18n="th_file">Файл</th><th data-i18n="th_rows">Рядків</th><th data-i18n="th_created">Створено</th><th></th></tr></thead><tbody></tbody></table>
   </div>
 
   <div class="card hidden" id="rowsCard">
     <h3 id="rowsTitle">Рядки</h3>
-    <select id="fStatus"><option value="">— статус —</option></select>
-    <select id="fOverdue"><option value="">— дедлайн —</option><option value="1">Тільки прострочені</option></select>
-    <input id="fQ" placeholder="Пошук...">
-    <button class="secondary" onclick="loadRows()">Фільтрувати</button>
-    <button class="secondary" onclick="exportCsv()">Експорт CSV</button>
+    <select id="fStatus" aria-label="Фільтр за статусом"><option value="">— статус —</option></select>
+    <select id="fOverdue" aria-label="Фільтр за дедлайном"><option value="">— дедлайн —</option><option value="1" data-i18n="f_only_overdue">Тільки прострочені</option></select>
+    <input id="fQ" data-i18n-ph="ph_search" placeholder="Пошук..." aria-label="Пошук по рядках">
+    <button class="secondary" onclick="loadRows()" data-i18n="filter_btn">Фільтрувати</button>
+    <button class="secondary" onclick="exportCsv()" data-i18n="export_btn">Експорт CSV</button>
     <span style="margin-left:12px">
-      <select id="savedFilters" onchange="applySavedFilter(this.value)"><option value="">— збережені фільтри —</option></select>
-      <button class="secondary" onclick="saveFilter()">💾 Зберегти фільтр</button>
-      <button class="secondary" onclick="deleteFilter()">✖ Видалити фільтр</button>
+      <select id="savedFilters" onchange="applySavedFilter(this.value)" aria-label="Збережені фільтри"><option value="">— збережені фільтри —</option></select>
+      <button class="secondary" onclick="saveFilter()" data-i18n="save_filter_btn">💾 Зберегти фільтр</button>
+      <button class="secondary" onclick="deleteFilter()" data-i18n="del_filter_btn">✖ Видалити фільтр</button>
     </span>
     <span class="viewbtns">
-      <button id="vTable" class="active" onclick="setView('table')">Таблиця</button>
-      <button id="vKanban" onclick="setView('kanban')">Канбан</button>
+      <button id="vTable" class="active" onclick="setView('table')" data-i18n="view_table">Таблиця</button>
+      <button id="vKanban" onclick="setView('kanban')" data-i18n="view_kanban">Канбан</button>
     </span>
     <div id="kanban"></div>
     <div id="bulkBar" class="hidden" style="margin:8px 0">
-      Вибрано: <b id="bulkCount">0</b>
-      <select id="bulkStatus"><option value="">— новий статус —</option></select>
-      <button onclick="bulkStatusApply()">Змінити статус</button>
-      <button class="secondary" onclick="bulkDelete()">Видалити вибрані</button>
+      <span data-i18n="selected_n">Вибрано:</span> <b id="bulkCount">0</b>
+      <select id="bulkStatus" aria-label="Новий статус для вибраних"><option value="">— новий статус —</option></select>
+      <button onclick="bulkStatusApply()" data-i18n="bulk_status_btn">Змінити статус</button>
+      <button class="secondary" onclick="bulkDelete()" data-i18n="bulk_delete_btn">Видалити вибрані</button>
     </div>
     <table id="rowsTable"><thead><tr></tr></thead><tbody></tbody></table>
     <details class="fieldsbox" id="fieldsPanel">
-      <summary>Користувацькі поля</summary>
+      <summary data-i18n="custom_fields_h">Користувацькі поля</summary>
       <div id="fieldsList" style="margin:6px 0"></div>
-      <input id="cfName" placeholder="ім'я латиницею, напр. priority" aria-label="Ім'я нового поля"> 
-      <input id="cfLabel" placeholder="Назва в таблиці" aria-label="Назва нового поля">
+      <input id="cfName" data-i18n-ph="ph_field_name" placeholder="ім'я латиницею, напр. priority" aria-label="Ім'я нового поля"> 
+      <input id="cfLabel" data-i18n-ph="ph_field_label" placeholder="Назва в таблиці" aria-label="Назва нового поля">
       <select id="cfType" aria-label="Тип поля"><option>text</option><option>number</option><option>date</option><option>select</option></select>
-      <input id="cfOptions" placeholder="варіанти через кому (для select)" aria-label="Варіанти select-поля">
-      <button onclick="addField()">Додати поле</button>
+      <input id="cfOptions" data-i18n-ph="ph_field_options" placeholder="варіанти через кому (для select)" aria-label="Варіанти select-поля">
+      <button onclick="addField()" data-i18n="add_field_btn">Додати поле</button>
     </details>
-    <h4>Журнал змін (audit)</h4>
+    <h4 data-i18n="audit_h">Журнал змін (audit)</h4>
     <div id="auditBox" class="muted"></div>
   </div>
 </main>
+<script src="/static/i18n.js"></script>
 <script>
+applyI18n();
+function setLang(lang) {
+  localStorage.setItem('lang', lang);
+  window.__lang = lang;
+  document.documentElement.lang = lang === 'ua' ? 'uk' : 'en';
+  applyI18n();
+  if (currentColl) loadRows(); // re-render dynamic labels
+}
 let token = localStorage.getItem('token') || '';
 let uploadId = null, columns = [], currentColl = null, lastSheet = null;
 const ENTITIES = ['', 'item', 'quantity', 'status', 'assignee', 'due_date', 'amount'];
@@ -168,8 +182,8 @@ async function upload(manualHeader, sheet) {
   } else sb.classList.add('hidden');
   const hdr = document.getElementById('hdrRow');
   const maxRow = Math.min(12, d.header_row + 10);
-  hdr.innerHTML = `<option value="">Авто (рядок ${d.header_row})</option>` +
-    Array.from({ length: maxRow }, (_, i) => `<option value="${i + 1}" ${i + 1 === d.header_row && manualHeader ? 'selected' : ''}>Рядок ${i + 1}</option>`).join('');
+  hdr.innerHTML = `<option value="">${t('auto_header_row', { n: d.header_row })}</option>` +
+    Array.from({ length: maxRow }, (_, i) => `<option value="${i + 1}" ${i + 1 === d.header_row && manualHeader ? 'selected' : ''}>${t('header_row_n', { n: i + 1 })}</option>`).join('');
   const suggested = d.suggested_mapping || {};
   const tb = document.querySelector('#mapTable tbody'); tb.innerHTML = '';
   columns.forEach(col => {
@@ -198,7 +212,7 @@ async function loadCollections() {
   cols.forEach(c => {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${c.id}</td><td>${c.name}</td><td class="muted">${c.source_file}</td><td>${c.row_count}</td><td class="muted">${c.created_at}</td>` +
-      `<td><button onclick="openColl(${c.id},'${c.name.replace(/'/g, "\\'")}')">Відкрити</button></td>`;
+      `<td><button onclick="openColl(${c.id},'${c.name.replace(/'/g, "\\'")}')">${t('open_btn')}</button></td>`;
     tb.appendChild(tr);
   });
   if (cols.length) document.getElementById('listCard').classList.remove('hidden');
@@ -223,8 +237,8 @@ async function openColl(id, name) {
   currentColl = id;
   document.getElementById('rowsTitle').textContent = name;
   document.getElementById('rowsCard').classList.remove('hidden');
-  fStatus.innerHTML = '<option value="">— статус —</option>' + ['new','in_progress','done','blocked'].map(s => `<option>${s}</option>`).join('');
-  document.getElementById('bulkStatus').innerHTML = '<option value="">— новий статус —</option>' + ['new','in_progress','done','blocked'].map(s => `<option>${s}</option>`).join('');
+  fStatus.innerHTML = `<option value="">${t('opt_status')}</option>` + ['new','in_progress','done','blocked'].map(s => `<option>${s}</option>`).join('');
+  document.getElementById('bulkStatus').innerHTML = `<option value="">${t('opt_new_status')}</option>` + ['new','in_progress','done','blocked'].map(s => `<option>${s}</option>`).join('');
   fOverdue.value = ''; fQ.value = '';
   await loadSavedFilters();
   await loadFields();
@@ -234,8 +248,8 @@ async function openColl(id, name) {
 
 // ---- Custom (user-defined) fields: text/number/date/select per collection
 let customFields = [];
-const BASE_HEADERS = [['item', 'Item'], ['quantity', 'Qty'], ['status', 'Статус'],
-                      ['assignee', 'Виконавець'], ['due_date', 'Дедлайн'], ['amount', 'Сума']];
+const BASE_HEADERS = [['item', 'th_item'], ['quantity', 'th_qty'], ['status', 'th_status'],
+                      ['assignee', 'th_assignee'], ['due_date', 'th_due'], ['amount', 'th_amount']];
 
 async function loadFields() {
   customFields = await api(`/api/collections/${currentColl}/fields`);
@@ -244,7 +258,7 @@ async function loadFields() {
     ? customFields.map(f =>
         `<span class="chip">${f.label} <i class="muted">(${f.type}${f.options.length ? ': ' + f.options.join('/') : ''})</i>` +
         ` <button class="mini" aria-label="Видалити поле ${f.label}" onclick="delField(${f.id})">✖</button></span>`).join(' ')
-    : '<span class="muted">Ще немає користувацьких полів</span>';
+    : `<span class="muted">${t('fields_none')}</span>`;
 }
 
 async function addField() {
@@ -262,7 +276,7 @@ async function addField() {
 }
 
 async function delField(id) {
-  if (!confirm('Видалити поле разом з його значеннями у всіх рядках?')) return;
+  if (!confirm(t('del_field_confirm'))) return;
   try {
     await api(`/api/collections/${currentColl}/fields/${id}`, { method: 'DELETE' });
     await loadFields();
@@ -283,7 +297,7 @@ let savedFilters = [];
 async function loadSavedFilters() {
   savedFilters = await api(`/api/collections/${currentColl}/filters`);
   const sel = document.getElementById('savedFilters');
-  sel.innerHTML = '<option value="">— збережені фільтри —</option>' +
+  sel.innerHTML = `<option value="">${t('f_saved')}</option>` +
     savedFilters.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
 }
 
@@ -298,7 +312,7 @@ function applySavedFilter(id) {
 }
 
 async function saveFilter() {
-  const name = prompt('Назва фільтра:');
+  const name = prompt(t('prompt_filter_name'));
   if (!name) return;
   const filters = {};
   if (fStatus.value) filters.status = fStatus.value;
@@ -313,7 +327,7 @@ async function saveFilter() {
 
 async function deleteFilter() {
   const id = document.getElementById('savedFilters').value;
-  if (!id) { alert('Виберіть фільтр зі списку'); return; }
+  if (!id) { alert(t('alert_pick_filter')); return; }
   await api('/api/filters/' + id, { method: 'DELETE' });
   await loadSavedFilters();
 }
@@ -326,13 +340,13 @@ async function loadRows() {
   const rows = await api(`/api/collections/${currentColl}/rows?` + p);
   const thead = document.querySelector('#rowsTable thead tr');
   thead.innerHTML = `<th><input type="checkbox" id="selAll" onchange="toggleAll(this.checked)" aria-label="Вибрати всі рядки"></th>` +
-    BASE_HEADERS.map(([f, t]) => `<th>${t}</th>`).join('') +
+    BASE_HEADERS.map(([f, k]) => `<th>${t(k)}</th>`).join('') +
     customFields.map(f => `<th>${f.label}</th>`).join('');
   const tb = document.querySelector('#rowsTable tbody'); tb.innerHTML = '';
   rows.forEach(r => {
     const tr = document.createElement('tr');
     if (r.overdue) tr.className = 'overdue';
-    const dd = r.due_date ? (r.overdue ? `<span class="badge-overdue">${r.due_date} ⚠ прострочено</span>` : r.due_date) : '';
+    const dd = r.due_date ? (r.overdue ? `<span class="badge-overdue">${r.due_date} ⚠ ${t('overdue_badge')}</span>` : r.due_date) : '';
     const customCells = customFields.map(f => {
       if (f.type === 'select') {
         const opts = ['', ...f.options].map(o => `<option ${o === (r[f.name] ?? '') ? 'selected' : ''}>${o}</option>`).join('');
@@ -438,7 +452,7 @@ document.getElementById('rowsTable').addEventListener('keydown', e => {
 
 async function exportCsv() {
   const r = await fetch(`/api/collections/${currentColl}/export.csv`, { headers: { Authorization: 'Bearer ' + token } });
-  if (!r.ok) { alert('Помилка експорту'); return; }
+  if (!r.ok) { alert(t('alert_export_error')); return; }
   const blob = await r.blob();
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -462,20 +476,20 @@ function updateBulkBar() {
 }
 async function bulkStatusApply() {
   const status = document.getElementById('bulkStatus').value;
-  if (!status) { alert('Виберіть статус'); return; }
+  if (!status) { alert(t('alert_pick_status')); return; }
   const ids = selectedIds();
   if (!ids.length) return;
   const d = await api('/api/rows/bulk', { method: 'POST', body: JSON.stringify({ ids, fields: { status } }) });
-  if (d.failed.length) alert('Не вдалося: ' + d.failed.map(f => f.id).join(', '));
+  if (d.failed.length) alert(t('bulk_failed') + ' ' + d.failed.map(f => f.id).join(', '));
   document.getElementById('selAll').checked = false;
   await Promise.all([loadRows(), currentView === 'kanban' ? loadKanban() : null]);
 }
 async function bulkDelete() {
   const ids = selectedIds();
-  if (!ids.length || !confirm(`Видалити ${ids.length} рядків?`)) return;
+  if (!ids.length || !confirm(t('confirm_delete_rows', { n: ids.length }))) return;
   try {
     const d = await api('/api/rows/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) });
-    if (d.failed.length) alert('Не видалено: ' + d.failed.map(f => f.id).join(', '));
+    if (d.failed.length) alert(t('bulk_delete_failed') + ' ' + d.failed.map(f => f.id).join(', '));
   } catch (e) { alert(e.message); }
   await Promise.all([loadRows(), currentView === 'kanban' ? loadKanban() : null]);
 }
