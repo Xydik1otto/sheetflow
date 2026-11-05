@@ -128,8 +128,12 @@ bash scripts/smoke.sh   # boots a server on a random port and probes the endpoin
 
 ## Contributing
 
-PRs and issues are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
-UI languages: Ukrainian and English only (a deliberate project decision).
+PRs and issues are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md),
+security — [SECURITY.md](SECURITY.md). UI languages: Ukrainian and English
+only (a deliberate project decision).
+
+Recommended GitHub topics for the repository:
+`smb`, `excel`, `no-code`, `fastapi`, `sqlite`, `small-business`.
 
 ## License
 

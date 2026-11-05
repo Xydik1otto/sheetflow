@@ -1,6 +1,11 @@
 __pycache__/
 *.pyc
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+.env.*
 .pytest_cache/
 .venv/
 venv/
@@ -8,3 +13,4 @@ dist/
 build/
 *.egg-info/
 .DS_Store
+uploads/

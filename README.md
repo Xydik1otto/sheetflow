@@ -129,6 +129,15 @@ HTML + vanilla JS без build-кроку.
 bash scripts/smoke.sh   # підніме сервер на випадковому порті й перевірить ендпоінти
 ```
 
+## Contributing
+
+PR та issues вітаються — дивіться [CONTRIBUTING.md](CONTRIBUTING.md),
+безпека — [SECURITY.md](SECURITY.md). Мови інтерфейсу: українська та англійська
+(свідоме рішення проєкту).
+
+Рекомендовані GitHub topics для репозиторію:
+`smb`, `excel`, `no-code`, `fastapi`, `sqlite`, `small-business`.
+
 ## Ліцензія
 
 [MIT](LICENSE)
