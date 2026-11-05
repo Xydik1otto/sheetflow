@@ -100,6 +100,43 @@ def evaluate_row(formulas: dict[str, str], row: dict) -> dict[str, float | None]
     return out
 
 
+def formula_refs(formula: str) -> set[str]:
+    """Identifiers referenced by a formula (best effort; bad tokens ignored)."""
+    try:
+        tokens = parse_formula_tokens(formula)
+    except ValueError:
+        return set()
+    return {t for t in tokens if _IDENT.match(t)}
+
+
+def detect_cycles(formulas: dict[str, str]) -> list[list[str]]:
+    """Cyclic references among calculated columns, e.g. a = b+1, b = a*2.
+
+    Returns a list of cycles (each a list of column names, closed back to its
+    start). Empty list = the formula set is a valid DAG.
+    """
+    graph = {name: formula_refs(f) & set(formulas) for name, f in formulas.items()}
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {name: WHITE for name in graph}
+    cycles: list[list[str]] = []
+
+    def dfs(node: str, path: list[str]) -> None:
+        color[node] = GRAY
+        path.append(node)
+        for dep in graph[node]:
+            if color[dep] == GRAY:
+                cycles.append(path[path.index(dep):] + [dep])
+            elif color[dep] == WHITE:
+                dfs(dep, path)
+        path.pop()
+        color[node] = BLACK
+
+    for name in graph:
+        if color[name] == WHITE:
+            dfs(name, [])
+    return cycles
+
+
 def available_fields(base: dict[str, str]) -> set[str]:
     """Entity fields + calc column names — everything a formula may reference."""
     return set(ENTITY_FIELDS) | set(base)

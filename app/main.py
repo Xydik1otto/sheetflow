@@ -239,6 +239,7 @@ def list_rows(cid: int, status: str | None = None, assignee: str | None = None,
               overdue: bool = False, q: str | None = None, conn=Depends(db.db)):
     coll = conn.execute("SELECT calc_json FROM collections WHERE id = ?", (cid,)).fetchone()
     formulas = calc.calc_from_json(coll["calc_json"]) if coll is not None else {}
+    custom_fields = db.list_custom_fields(conn, cid)
     sql = "SELECT * FROM rows WHERE collection_id = ?"
     params: list = [cid]
     if status:
@@ -269,7 +270,9 @@ def list_rows(cid: int, status: str | None = None, assignee: str | None = None,
             d.update(json.loads(r["extra_json"]))
         d["overdue"] = bool(r["due_date"] and r["due_date"] < today and r["status"] != "done")
         if formulas:
-            d.update(calc.evaluate_row(formulas, {f: d.get(f) for f in importer.ENTITY_FIELDS}))
+            values = {f: d.get(f) for f in importer.ENTITY_FIELDS}
+            values.update({f["name"]: d.get(f["name"]) for f in custom_fields})
+            d.update(calc.evaluate_row(formulas, values))
         out.append(d)
     return out
 
@@ -592,18 +595,28 @@ def get_formulas(cid: int, conn=Depends(db.db)):
 
 @app.put("/api/collections/{cid}/formulas")
 def put_formulas(cid: int, body: FormulasIn, conn=Depends(db.db), user: str = Depends(require_admin)):
-    """Define derived (calculated) columns, e.g. {"total": "=quantity*amount"}."""
+    """Define derived (calculated) columns, e.g. {"total": "=quantity*amount"}.
+
+    Formulas may reference entity fields, custom fields of this collection and
+    other calculated columns; cycles are rejected with 422.
+    """
     coll = conn.execute("SELECT id FROM collections WHERE id = ?", (cid,)).fetchone()
     if coll is None:
         raise HTTPException(404, "Collection not found")
-    available = calc.available_fields(body.formulas)
+    custom_names = {f["name"] for f in db.list_custom_fields(conn, cid)}
+    available = calc.available_fields(body.formulas) | custom_names
     problems = []
     for name, formula in body.formulas.items():
         if not calc._IDENT.match(name) or name in importer.ENTITY_FIELDS:
             problems.append(f"Invalid calculated column name: {name!r}")
+        elif name in custom_names:
+            problems.append(f"Calculated column {name!r} collides with a custom field")
         err = calc.validate_formula(formula, available)
         if err:
             problems.append(f"{name}: {err}")
+    if not problems:
+        for cycle in calc.detect_cycles(body.formulas):
+            problems.append("cycle detected: " + " -> ".join(cycle))
     if problems:
         raise HTTPException(422, "; ".join(problems))
     conn.execute("UPDATE collections SET calc_json = ? WHERE id = ?",
