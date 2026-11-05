@@ -88,6 +88,7 @@ td select { min-width:90px; }
       <select id="tplSelect" aria-label="Шаблон колекції"></select>
       <button class="secondary" onclick="createFromTemplate()" data-i18n="tpl_btn">Створити з шаблону</button>
       <span class="muted" data-i18n="tpl_or">або імпортуйте файл нижче ↓</span>
+      <button class="secondary" onclick="exportAllJson()" data-i18n="export_json_btn">⬇ Експорт JSON (усі дані)</button>
     </div>
     <table id="collTable"><thead><tr><th data-i18n="th_id">#</th><th data-i18n="th_name">Назва</th><th data-i18n="th_file">Файл</th><th data-i18n="th_rows">Рядків</th><th data-i18n="th_created">Створено</th><th></th></tr></thead><tbody></tbody></table>
   </div>
@@ -152,14 +153,39 @@ async function api(path, opts = {}) {
 
 async function login() {
   const r = await api('/api/login', { method: 'POST', body: JSON.stringify({ username: u.value, password: p.value }) });
-  token = r.token; localStorage.setItem('token', token);
+  token = r.token; window.__role = r.role; localStorage.setItem('token', token);
   document.getElementById('loginCard').classList.add('hidden');
   boot();
 }
 
 async function boot() {
   document.getElementById('step1').classList.remove('hidden');
+  try { window.__role = (await api('/api/me')).role; } catch (_) {}
   await loadCollections();
+}
+
+// ---- Data safety: one-click full export + guarded collection deletion
+async function exportAllJson() {
+  const r = await fetch('/api/export/json', { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) { alert(t('alert_export_error')); return; }
+  const blob = await r.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'sheetflow-export.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function deleteCollection(id, name, rowCount) {
+  const answer = prompt(t('confirm_delete_coll', { name, n: rowCount }));
+  if (answer === null) return;
+  if (answer.trim() !== name) { alert(t('confirm_delete_coll_mismatch')); return; }
+  try {
+    await api('/api/collections/' + id, { method: 'DELETE' });
+    document.getElementById('rowsCard').classList.add('hidden');
+    currentColl = null;
+    await loadCollections();
+  } catch (e) { alert(e.message); }
 }
 
 let lastFile = null;
@@ -213,8 +239,11 @@ async function loadCollections() {
   const tb = document.querySelector('#collTable tbody'); tb.innerHTML = '';
   cols.forEach(c => {
     const tr = document.createElement('tr');
+    const delBtn = window.__role === 'admin'
+      ? ` <button class="mini" aria-label="Видалити колекцію ${c.name}" onclick="deleteCollection(${c.id},'${c.name.replace(/'/g, "\\'")}',${c.row_count})">${t('del_coll_btn')}</button>`
+      : '';
     tr.innerHTML = `<td>${c.id}</td><td>${c.name}</td><td class="muted">${c.source_file}</td><td>${c.row_count}</td><td class="muted">${c.created_at}</td>` +
-      `<td><button onclick="openColl(${c.id},'${c.name.replace(/'/g, "\\'")}')">${t('open_btn')}</button></td>`;
+      `<td><button onclick="openColl(${c.id},'${c.name.replace(/'/g, "\\'")}')">${t('open_btn')}</button>${delBtn}</td>`;
     tb.appendChild(tr);
   });
   if (cols.length) document.getElementById('listCard').classList.remove('hidden');

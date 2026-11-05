@@ -664,6 +664,68 @@ def export_csv(cid: int, conn=Depends(db.db), user: str = Depends(current_user))
     )
 
 
+@app.get("/api/export/json")
+def export_all_json(conn=Depends(db.db), user: str = Depends(current_user)):
+    """One-click full data export: every collection with its rows, custom
+    fields, formulas and filters (data-safety requirement)."""
+    collections = []
+    for c in conn.execute("SELECT * FROM collections ORDER BY id").fetchall():
+        cid = c["id"]
+        collections.append({
+            "id": cid,
+            "name": c["name"],
+            "source_file": c["source_file"],
+            "mapping": json.loads(c["mapping_json"]),
+            "formulas": calc.calc_from_json(c["calc_json"]),
+            "created_by": c["created_by"],
+            "created_at": c["created_at"],
+            "custom_fields": db.list_custom_fields(conn, cid),
+            "saved_filters": [
+                {"name": f["name"], "filters": json.loads(f["filter_json"])}
+                for f in conn.execute(
+                    "SELECT name, filter_json FROM saved_filters WHERE collection_id = ? ORDER BY id",
+                    (cid,),
+                ).fetchall()
+            ],
+            "rows": [dict(r) for r in conn.execute(
+                "SELECT item, quantity, status, assignee, due_date, amount, extra_json, "
+                "created_at, updated_at FROM rows WHERE collection_id = ? ORDER BY id", (cid,)
+            ).fetchall()],
+        })
+    payload = {
+        "app": "sheetflow",
+        "exported_at": db.now_iso(),
+        "collections": collections,
+    }
+    return Response(
+        content=json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=sheetflow-export.json"},
+    )
+
+
+@app.delete("/api/collections/{cid}")
+def delete_collection(cid: int, conn=Depends(db.db), user: str = Depends(require_admin)):
+    """Delete a whole collection (admin only). The UI asks for a typed
+    confirmation; every deleted row is audited first."""
+    coll = conn.execute("SELECT id, name FROM collections WHERE id = ?", (cid,)).fetchone()
+    if coll is None:
+        raise HTTPException(404, "Collection not found")
+    row_ids = [r["id"] for r in conn.execute(
+        "SELECT id FROM rows WHERE collection_id = ?", (cid,)).fetchall()]
+    for rid in row_ids:
+        db.audit(conn, user, "row.deleted", collection_id=cid, row_id=rid,
+                 old_value=f"collection '{coll['name']}' deleted")
+    conn.execute("DELETE FROM rows WHERE collection_id = ?", (cid,))
+    conn.execute("DELETE FROM saved_filters WHERE collection_id = ?", (cid,))
+    conn.execute("DELETE FROM custom_fields WHERE collection_id = ?", (cid,))
+    conn.execute("DELETE FROM collections WHERE id = ?", (cid,))
+    db.audit(conn, user, "collection.deleted", collection_id=cid,
+             old_value=f"{coll['name']} ({len(row_ids)} rows)")
+    conn.commit()
+    return {"ok": True, "deleted_rows": len(row_ids)}
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True}

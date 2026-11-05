@@ -37,6 +37,10 @@ const I18N = {
     bulk_failed: "Не вдалося:", bulk_delete_failed: "Не видалено:",
     auto_header_row: "Авто (рядок {n})", header_row_n: "Рядок {n}",
     demo_btn: " завантажити демо-колекцію", demo_hint: "Новий тут?",
+    export_json_btn: "⬇ Експорт JSON (усі дані)",
+    del_coll_btn: "Видалити",
+    confirm_delete_coll: "Видалити колекцію «{name}» разом з {n} рядками? Введіть назву колекції для підтвердження:",
+    confirm_delete_coll_mismatch: "Назва не збігається — видалення скасовано.",
   },
   en: {
     app_tagline: "Import your process, don't change it",
@@ -75,6 +79,10 @@ const I18N = {
     bulk_failed: "Failed:", bulk_delete_failed: "Not deleted:",
     auto_header_row: "Auto (row {n})", header_row_n: "Row {n}",
     demo_btn: " load a demo collection", demo_hint: "New here?",
+    export_json_btn: "⬇ Export JSON (all data)",
+    del_coll_btn: "Delete",
+    confirm_delete_coll: "Delete collection \"{name}\" with {n} rows? Type the collection name to confirm:",
+    confirm_delete_coll_mismatch: "Name does not match — deletion cancelled.",
   },
 };
 
