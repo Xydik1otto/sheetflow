@@ -1,10 +1,11 @@
-"""Tests for one-click collection templates (orders / clients / inventory)."""
+"""Tests for one-click collection templates (orders / clients / inventory /
+tasks / subscriptions)."""
 from app import db as db_mod
 
 
-def test_list_templates_returns_three_classics(client):
+def test_list_templates_returns_five_classics(client):
     tpls = client.get("/api/templates").json()
-    assert {t["key"] for t in tpls} == {"orders", "clients", "inventory"}
+    assert {t["key"] for t in tpls} == {"orders", "clients", "inventory", "tasks", "subscriptions"}
     for t in tpls:
         assert t["name"] and t["columns"] and t["mapping"]
 
@@ -49,3 +50,32 @@ def test_template_creation_is_audited(client):
     events = client.get(f"/api/collections/{r.json()['collection_id']}/audit").json()
     assert any(e["action"] == "collection.created" and "template 'clients'" in (e["new_value"] or "")
                for e in events)
+
+
+def test_tasks_template_rows(client):
+    r = client.post("/api/collections/from-template", json={"template": "tasks"})
+    d = r.json()
+    assert d["name"] == "Задачі" and d["imported"] == 2
+    rows = client.get(f"/api/collections/{d['collection_id']}/rows").json()
+    assert rows[0]["item"] == "Оновити сайт"
+    assert rows[0]["quantity"] == 16 and rows[0]["amount"] == 8000
+    assert rows[0]["due_date"] == "2026-12-15" and rows[0]["status"] == "new"
+
+
+def test_subscriptions_template_rows(client):
+    r = client.post("/api/collections/from-template", json={"template": "subscriptions"})
+    d = r.json()
+    assert d["name"] == "Підписки" and d["imported"] == 2
+    rows = client.get(f"/api/collections/{d['collection_id']}/rows").json()
+    assert rows[0]["item"] == "Microsoft 365"
+    assert rows[0]["quantity"] == 12 and rows[0]["amount"] == 2900
+    assert rows[1]["due_date"] == "2026-11-20"
+
+
+def test_every_template_mapping_is_valid_and_complete(client):
+    """Each template's mapping must pass the importer's validation as-is."""
+    from app import importer, templates
+    for key, t in templates.TEMPLATES.items():
+        problems = importer.validate_mapping(t["columns"], t["mapping"])
+        assert problems == [], f"template {key}: {problems}"
+        assert len(t["sample_rows"]) >= 2, f"template {key}: too few sample rows"
