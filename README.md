@@ -1,9 +1,9 @@
 # SheetFlow — Excel → App мігратор для малого бізнесу
 
-![tests](https://img.shields.io/badge/tests-48%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-83%20passing-brightgreen)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.1.0--alpha-orange)
+![version](https://img.shields.io/badge/version-0.3.0-orange)
 
 ## Проблема
 
@@ -28,6 +28,19 @@
 4. Далі — список з фільтрами, **inline-редагування всіх полів**, **audit log**
    (хто/коли/що змінив), прострочені дедлайни підсвічені червоним,
    CSV-експорт назад у звичний світ.
+
+## Можливості (v0.3.0)
+
+- Імпорт `.xlsx` з **fuzzy авто-мапінгом** колонок та **авто-детектом рядка-шапки**
+  (ручний вибір теж доступний).
+- **Inline-редагування всіх полів** таблиці (PUT) + audit log на кожну зміну.
+- **Розрахункові колонки**: формули виду `=quantity*amount` як derived-поля
+  (обмежений безпечний evaluator, значення вважаються на льоту).
+- **Нагадування по дедлайнах**: outbox черга email (`/api/reminders/*`),
+  ідемпотентний запуск, реальна відправка через SMTP за конфігурацією.
+- **Шаблони колекцій** одним кліком: замовлення, клієнти, інвентар.
+- **Багатокористувацьість**: роль `admin` (імпорт, аудит, користувачі,
+  нагадування) та `worker` (перегляд, редагування рядків, експорт).
 
 Перший користувач системи автоматично стає адміном.
 
@@ -72,9 +85,10 @@ HTML + vanilla JS без build-кроку.
 
 ## Roadmap
 
+- [x] Сповіщення про прострочені дедлайни (email outbox)
+- [x] Ролі та багатокористувацьість (admin / worker)
 - [ ] Повторний імпорт (upsert за ключем)
-- [ ] Сповіщення email/Telegram про прострочені дедлайни
-- [ ] Ролі та багатокористувацьість
+- [ ] Telegram-сповіщення
 - [ ] Інтеграції Google Sheets / 1C
 
 ## Ліцензія

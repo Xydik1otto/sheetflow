@@ -29,7 +29,7 @@ from pydantic import BaseModel
 
 from . import calc, db, importer, reminders, templates
 
-app = FastAPI(title="SheetFlow", version="0.1.0")
+app = FastAPI(title="SheetFlow", version="0.3.0")
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
