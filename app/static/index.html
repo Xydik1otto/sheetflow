@@ -161,9 +161,12 @@ async function loadRows() {
     const tr = document.createElement('tr');
     if (r.overdue) tr.className = 'overdue';
     const dd = r.due_date ? (r.overdue ? `<span class="badge-overdue">${r.due_date} ⚠ прострочено</span>` : r.due_date) : '';
-    tr.innerHTML = `<td>${r.item ?? ''}</td><td>${r.quantity ?? ''}</td>` +
+    tr.innerHTML = `<td contenteditable="true" data-id="${r.id}" data-field="item">${r.item ?? ''}</td>` +
+      `<td contenteditable="true" data-id="${r.id}" data-field="quantity">${r.quantity ?? ''}</td>` +
       `<td><select onchange="setStatus(${r.id}, this.value)">${['','new','in_progress','done','blocked'].map(s => `<option ${s === r.status ? 'selected' : ''}>${s}</option>`).join('')}</select></td>` +
-      `<td>${r.assignee ?? ''}</td><td>${dd}</td><td>${r.amount ?? ''}</td>`;
+      `<td contenteditable="true" data-id="${r.id}" data-field="assignee">${r.assignee ?? ''}</td>` +
+      `<td contenteditable="true" data-id="${r.id}" data-field="due_date">${r.due_date ?? ''}</td>` +
+      `<td contenteditable="true" data-id="${r.id}" data-field="amount">${r.amount ?? ''}</td>`;
     tb.appendChild(tr);
   });
   const audit = await api(`/api/collections/${currentColl}/audit`);
@@ -175,6 +178,31 @@ async function setStatus(id, status) {
   await api('/api/rows/' + id, { method: 'PATCH', body: JSON.stringify({ field: 'status', value: status }) });
   await loadRows();
 }
+
+// Inline editing: editable cells save via PUT on focus loss; Escape cancels.
+let _beforeEdit = { id: null, field: null, text: null };
+document.getElementById('rowsTable').addEventListener('focusin', e => {
+  const td = e.target.closest('td[contenteditable]');
+  if (td) _beforeEdit = { id: td.dataset.id, field: td.dataset.field, text: td.textContent };
+});
+document.getElementById('rowsTable').addEventListener('focusout', async e => {
+  const td = e.target.closest('td[contenteditable]');
+  if (!td) return;
+  const { id, field, text: before } = _beforeEdit;
+  const text = td.textContent.trim();
+  if (id !== td.dataset.id || field !== td.dataset.field || text === before) return;
+  try {
+    const fields = {}; fields[field] = text === '' ? null : text;
+    await api('/api/rows/' + id, { method: 'PUT', body: JSON.stringify({ fields }) });
+    await loadRows();
+  } catch (err) { alert(err.message); await loadRows(); }
+});
+document.getElementById('rowsTable').addEventListener('keydown', e => {
+  if (e.key === 'Escape' && e.target.closest('td[contenteditable]')) {
+    e.target.textContent = _beforeEdit.text;
+    e.target.blur();
+  }
+});
 
 function exportCsv() { window.open(`/api/collections/${currentColl}/export.csv`, '_blank'); }
 

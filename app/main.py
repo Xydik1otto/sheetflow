@@ -197,35 +197,63 @@ class RowPatch(BaseModel):
     value: str | int | float | None
 
 
+class RowUpdate(BaseModel):
+    fields: dict[str, str | int | float | None]
+
+
 EDITABLE = {"item", "quantity", "status", "assignee", "due_date", "amount"}
+
+
+def _apply_row_update(conn, row_id: int, fields: dict, user: str) -> dict:
+    """Validate and apply field changes to one row; one audit event per changed field."""
+    unknown = set(fields) - EDITABLE
+    if unknown:
+        raise HTTPException(422, f"Fields not editable: {', '.join(sorted(unknown))}")
+    row = conn.execute("SELECT * FROM rows WHERE id = ?", (row_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "Row not found")
+    changes: list[tuple[str, object, object]] = []
+    coerced_values: dict[str, object] = {}
+    for field, value in fields.items():
+        coerced, err = importer.VALIDATORS[field](value)
+        if err:
+            raise HTTPException(422, f"Invalid value for {field}: {err}")
+        if field == "status" and coerced is None:
+            coerced = "new"
+        coerced_values[field] = coerced
+        if coerced != row[field]:
+            changes.append((field, row[field], coerced))
+    for field, _old, coerced in changes:
+        conn.execute(
+            f"UPDATE rows SET {field} = ?, updated_at = ? WHERE id = ?",
+            (coerced, db.now_iso(), row_id),
+        )
+    for field, old, coerced in changes:
+        db.audit(
+            conn, user, "row.updated", collection_id=row["collection_id"], row_id=row_id,
+            field=field, old_value=str(old) if old is not None else None,
+            new_value=str(coerced) if coerced is not None else None,
+        )
+    conn.commit()
+    return {
+        "ok": True,
+        "updated": {f: new for f, _o, new in changes},
+        "values": coerced_values,
+    }
 
 
 @app.patch("/api/rows/{row_id}")
 def patch_row(row_id: int, body: RowPatch, conn=Depends(db.db), user: str = Depends(current_user)):
-    if body.field not in EDITABLE:
-        raise HTTPException(422, f"Field {body.field!r} is not editable")
-    row = conn.execute(
-        "SELECT * FROM rows WHERE id = ?", (row_id,)
-    ).fetchone()
-    if row is None:
-        raise HTTPException(404, "Row not found")
-    coerced, err = importer.VALIDATORS[body.field](body.value)
-    if err:
-        raise HTTPException(422, f"Invalid value for {body.field}: {err}")
-    old = row[body.field]
-    if body.field == "status" and coerced is None:
-        coerced = "new"
-    conn.execute(
-        f"UPDATE rows SET {body.field} = ?, updated_at = ? WHERE id = ?",
-        (coerced, db.now_iso(), row_id),
-    )
-    db.audit(
-        conn, user, "row.updated", collection_id=row["collection_id"], row_id=row_id,
-        field=body.field, old_value=str(old) if old is not None else None,
-        new_value=str(coerced) if coerced is not None else None,
-    )
-    conn.commit()
-    return {"ok": True, "field": body.field, "value": coerced}
+    result = _apply_row_update(conn, row_id, {body.field: body.value}, user)
+    return {"ok": True, "field": body.field, "value": result["values"].get(body.field)}
+
+
+@app.put("/api/rows/{row_id}")
+def put_row(row_id: int, body: RowUpdate, conn=Depends(db.db), user: str = Depends(current_user)):
+    """Inline edit: update any set of editable fields in one request."""
+    if not body.fields:
+        raise HTTPException(422, "Empty update: provide at least one field")
+    return _apply_row_update(conn, row_id, body.fields, user)
 
 
 @app.get("/api/collections/{cid}/audit")
