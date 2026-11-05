@@ -75,13 +75,18 @@ class LoginIn(BaseModel):
 
 @app.post("/api/login")
 def login(body: LoginIn, conn=Depends(db.db)):
-    import hashlib
-
     row = conn.execute(
         "SELECT id, password_hash, role FROM users WHERE username = ?", (body.username,)
     ).fetchone()
-    if row is None or row["password_hash"] != hashlib.sha256(body.password.encode()).hexdigest():
+    if row is None or not db.verify_password(body.password, row["password_hash"]):
         raise HTTPException(401, "Invalid username or password")
+    if db.is_legacy_hash(row["password_hash"]):
+        # Transparent upgrade: legacy v0.3.0 sha256 hashes are re-hashed
+        # with PBKDF2 on the first successful login.
+        conn.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (db.hash_password(body.password), row["id"]),
+        )
     token = uuid.uuid4().hex
     conn.execute(
         "INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)",
@@ -89,6 +94,18 @@ def login(body: LoginIn, conn=Depends(db.db)):
     )
     conn.commit()
     return {"ok": True, "token": token, "username": body.username, "role": row["role"]}
+
+
+@app.post("/api/logout")
+def logout(conn=Depends(db.db), authorization: str | None = Header(None)):
+    """Invalidate the current session token."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Not authenticated")
+    token = authorization[len("Bearer "):].strip()
+    if not db.delete_session(conn, token):
+        raise HTTPException(401, "Invalid session token (login again)")
+    conn.commit()
+    return {"ok": True}
 
 
 @app.get("/api/me")

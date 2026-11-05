@@ -2,9 +2,11 @@
 
 Schema-first, stdlib sqlite3 — no ORM, keeps the MVP small and auditable.
 """
+import hashlib
+import hmac
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 DB_PATH = os.environ.get(
     "SHEETFLOW_DB",
@@ -90,6 +92,41 @@ MIGRATIONS = {
 DEFAULT_STATUSES = ["new", "in_progress", "done", "blocked"]
 
 
+SESSION_TTL_SECONDS = 24 * 3600  # sessions expire after 24 hours
+PBKDF2_ITERATIONS = 200_000
+
+
+def hash_password(password: str) -> str:
+    """PBKDF2-HMAC-SHA256 with a random per-user salt (stdlib hashlib).
+
+    Format: pbkdf2_sha256$<iterations>$<salt_hex>$<hash_hex>
+    """
+    salt = os.urandom(16).hex()
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode(), salt.encode(), PBKDF2_ITERATIONS
+    ).hex()
+    return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt}${digest}"
+
+
+def is_legacy_hash(stored: str) -> bool:
+    """Old v0.3.0 hashes were bare unsalted sha256 hex digests."""
+    return len(stored) == 64 and all(c in "0123456789abcdef" for c in stored)
+
+
+def verify_password(password: str, stored: str) -> bool:
+    """Check a password against a PBKDF2 (or legacy sha256) hash."""
+    if is_legacy_hash(stored):
+        return hmac.compare_digest(stored, hashlib.sha256(password.encode()).hexdigest())
+    try:
+        _scheme, iterations, salt, digest = stored.split("$", 3)
+        candidate = hashlib.pbkdf2_hmac(
+            "sha256", password.encode(), salt.encode(), int(iterations)
+        ).hex()
+        return hmac.compare_digest(digest, candidate)
+    except (ValueError, TypeError):
+        return False
+
+
 def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -131,40 +168,47 @@ def init_db(db_path: str | None = None) -> None:
 
 def ensure_admin(conn: sqlite3.Connection, username: str = "admin", password: str = "admin123") -> None:
     """First user = admin. Created only if the users table is empty."""
-    import hashlib
-
     if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] > 0:
         return
-    pw_hash = hashlib.sha256(password.encode()).hexdigest()
     conn.execute(
         "INSERT INTO users (username, password_hash, role, is_admin, created_at) VALUES (?, ?, 'admin', 1, ?)",
-        (username, pw_hash, now_iso()),
+        (username, hash_password(password), now_iso()),
     )
 
 
 def create_user(conn: sqlite3.Connection, username: str, password: str, role: str = "worker") -> int:
     """Create a user with a role ('admin' | 'worker'). Raises ValueError on duplicates/bad role."""
-    import hashlib
-
     if role not in ROLES:
         raise ValueError(f"Unknown role {role!r}; available: {', '.join(ROLES)}")
     if conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
         raise ValueError(f"User {username!r} already exists")
-    pw_hash = hashlib.sha256(password.encode()).hexdigest()
     cur = conn.execute(
         "INSERT INTO users (username, password_hash, role, is_admin, created_at) VALUES (?, ?, ?, ?, ?)",
-        (username, pw_hash, role, 1 if role == "admin" else 0, now_iso()),
+        (username, hash_password(password), role, 1 if role == "admin" else 0, now_iso()),
     )
     return cur.lastrowid
 
 
 def get_user_by_token(conn: sqlite3.Connection, token: str) -> sqlite3.Row | None:
-    """Resolve a session bearer token to its user row."""
+    """Resolve a session bearer token to its user row.
+
+    Sessions expire after SESSION_TTL_SECONDS (24h); expired sessions are
+    purged from the table on every lookup.
+    """
+    cutoff = (datetime.now() - timedelta(seconds=SESSION_TTL_SECONDS)).isoformat(timespec="seconds")
+    conn.execute("DELETE FROM sessions WHERE created_at < ?", (cutoff,))
+    conn.commit()
     return conn.execute(
         "SELECT u.id, u.username, u.role FROM sessions s JOIN users u ON u.id = s.user_id "
-        "WHERE s.token = ?",
-        (token,),
+        "WHERE s.token = ? AND s.created_at >= ?",
+        (token, cutoff),
     ).fetchone()
+
+
+def delete_session(conn: sqlite3.Connection, token: str) -> bool:
+    """Remove one session (logout). Returns True if it existed."""
+    cur = conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+    return cur.rowcount > 0
 
 
 ROLES = ("admin", "worker")

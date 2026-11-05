@@ -93,4 +93,7 @@ def test_worker_password_is_hashed_not_stored(client, worker_client):
     from app import db as db_mod
     row = db_mod.get_conn().execute(
         "SELECT password_hash FROM users WHERE username = 'oksana'").fetchone()
-    assert row["password_hash"] != "w123" and len(row["password_hash"]) == 64
+    # PBKDF2 format since v0.4.0 (was bare sha256 hex in v0.3.0)
+    assert row["password_hash"] != "w123"
+    assert row["password_hash"].startswith("pbkdf2_sha256$")
+    assert db_mod.verify_password("w123", row["password_hash"])
