@@ -66,6 +66,11 @@ CREATE INDEX IF NOT EXISTS idx_audit_collection ON audit_events(collection_id);
 CREATE INDEX IF NOT EXISTS idx_audit_row ON audit_events(row_id);
 """
 
+# Columns added after the initial MVP schema (checked/applied by init_db).
+MIGRATIONS = {
+    "collections": {"calc_json": "ALTER TABLE collections ADD COLUMN calc_json TEXT"},
+}
+
 DEFAULT_STATUSES = ["new", "in_progress", "done", "blocked"]
 
 
@@ -95,12 +100,17 @@ def db():
 
 
 def init_db(db_path: str | None = None) -> None:
-    """Create schema. Uses DB_PATH unless db_path is given (used by tests)."""
+    """Create schema (and apply light migrations). Uses DB_PATH unless db_path is given."""
     global DB_PATH
     if db_path:
         DB_PATH = db_path
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        for table, columns in MIGRATIONS.items():
+            existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            for col, ddl in columns.items():
+                if col not in existing:
+                    conn.execute(ddl)
 
 
 def ensure_admin(conn: sqlite3.Connection, username: str = "admin", password: str = "admin123") -> None:

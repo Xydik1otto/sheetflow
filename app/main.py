@@ -22,7 +22,7 @@ from fastapi import Depends, FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from . import db, importer
+from . import calc, db, importer
 
 app = FastAPI(title="SheetFlow", version="0.1.0")
 
@@ -118,9 +118,9 @@ def map_columns(body: MapIn, conn=Depends(db.db), user: str = Depends(current_us
         raise HTTPException(422, "; ".join(problems))
 
     cur = conn.execute(
-        "INSERT INTO collections (name, source_file, mapping_json, created_by, created_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (body.name, filename, importer.mapping_to_json(body.mapping), user, db.now_iso()),
+        "INSERT INTO collections (name, source_file, mapping_json, calc_json, created_by, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (body.name, filename, importer.mapping_to_json(body.mapping), None, user, db.now_iso()),
     )
     collection_id = cur.lastrowid
     typed_rows, errors = importer.build_rows(data, body.mapping, header_row=body.header_row)
@@ -164,6 +164,8 @@ def list_collections(conn=Depends(db.db)):
 @app.get("/api/collections/{cid}/rows")
 def list_rows(cid: int, status: str | None = None, assignee: str | None = None,
               overdue: bool = False, q: str | None = None, conn=Depends(db.db)):
+    coll = conn.execute("SELECT calc_json FROM collections WHERE id = ?", (cid,)).fetchone()
+    formulas = calc.calc_from_json(coll["calc_json"]) if coll is not None else {}
     sql = "SELECT * FROM rows WHERE collection_id = ?"
     params: list = [cid]
     if status:
@@ -188,6 +190,8 @@ def list_rows(cid: int, status: str | None = None, assignee: str | None = None,
     for r in rows:
         d = dict(r)
         d["overdue"] = bool(r["due_date"] and r["due_date"] < today and r["status"] != "done")
+        if formulas:
+            d.update(calc.evaluate_row(formulas, {f: d.get(f) for f in importer.ENTITY_FIELDS}))
         out.append(d)
     return out
 
@@ -263,6 +267,47 @@ def audit_log(cid: int, limit: int = 200, conn=Depends(db.db)):
         (cid, limit),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ------------------------------------------------------- calculated columns
+
+
+class FormulasIn(BaseModel):
+    formulas: dict[str, str]
+
+
+@app.get("/api/collections/{cid}/formulas")
+def get_formulas(cid: int, conn=Depends(db.db)):
+    coll = conn.execute("SELECT calc_json FROM collections WHERE id = ?", (cid,)).fetchone()
+    if coll is None:
+        raise HTTPException(404, "Collection not found")
+    return {"formulas": calc.calc_from_json(coll["calc_json"])}
+
+
+@app.put("/api/collections/{cid}/formulas")
+def put_formulas(cid: int, body: FormulasIn, conn=Depends(db.db), user: str = Depends(current_user)):
+    """Define derived (calculated) columns, e.g. {"total": "=quantity*amount"}."""
+    coll = conn.execute("SELECT id FROM collections WHERE id = ?", (cid,)).fetchone()
+    if coll is None:
+        raise HTTPException(404, "Collection not found")
+    available = calc.available_fields(body.formulas)
+    problems = []
+    for name, formula in body.formulas.items():
+        if not calc._IDENT.match(name) or name in importer.ENTITY_FIELDS:
+            problems.append(f"Invalid calculated column name: {name!r}")
+        err = calc.validate_formula(formula, available)
+        if err:
+            problems.append(f"{name}: {err}")
+    if problems:
+        raise HTTPException(422, "; ".join(problems))
+    conn.execute("UPDATE collections SET calc_json = ? WHERE id = ?",
+                 (calc.calc_to_json(body.formulas) if body.formulas else None, cid))
+    db.audit(
+        conn, user, "collection.formulas_updated", collection_id=cid,
+        new_value=", ".join(body.formulas) if body.formulas else "cleared",
+    )
+    conn.commit()
+    return {"ok": True, "formulas": body.formulas}
 
 
 @app.get("/api/collections/{cid}/export.csv")
