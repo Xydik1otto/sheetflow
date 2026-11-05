@@ -22,7 +22,7 @@ from fastapi import Depends, FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from . import calc, db, importer, reminders
+from . import calc, db, importer, reminders, templates
 
 app = FastAPI(title="SheetFlow", version="0.1.0")
 
@@ -369,6 +369,64 @@ def flush_outbox(conn=Depends(db.db), user: str = Depends(current_user)):
     """Send queued reminders. Without SHEETFLOW_SMTP_* config they are marked failed."""
     result = reminders.flush(conn)
     return {"ok": True, **result}
+
+
+# ------------------------------------------------------------- templates
+
+
+class FromTemplateIn(BaseModel):
+    template: str
+    name: str | None = None  # optional collection name override
+
+
+@app.get("/api/templates")
+def list_templates():
+    return [
+        {"key": key, "name": t["name"], "columns": t["columns"], "mapping": t["mapping"]}
+        for key, t in templates.TEMPLATES.items()
+    ]
+
+
+@app.post("/api/collections/from-template")
+def from_template(body: FromTemplateIn, conn=Depends(db.db), user: str = Depends(current_user)):
+    """Create a collection from a classic template (orders/clients/inventory),
+    pre-filled with its sample rows — one click, no file needed."""
+    t = templates.TEMPLATES.get(body.template)
+    if t is None:
+        raise HTTPException(404, f"Unknown template {body.template!r}. "
+                                 f"Available: {', '.join(templates.TEMPLATES)}")
+    name = body.name or t["name"]
+    problems = importer.validate_mapping(t["columns"], t["mapping"])
+    assert not problems  # templates are static and always valid
+    cur = conn.execute(
+        "INSERT INTO collections (name, source_file, mapping_json, calc_json, created_by, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (name, f"template:{body.template}", importer.mapping_to_json(t["mapping"]), None,
+         user, db.now_iso()),
+    )
+    collection_id = cur.lastrowid
+    imported = 0
+    for raw in t["sample_rows"]:
+        typed = {f: None for f in importer.ENTITY_FIELDS}
+        for col, ent in t["mapping"].items():
+            value, _err = importer.VALIDATORS[ent](raw.get(col))
+            typed[ent] = value
+        conn.execute(
+            "INSERT INTO rows (collection_id, item, quantity, status, assignee, due_date, amount, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                collection_id, typed["item"], typed["quantity"],
+                typed["status"] or "new", typed["assignee"], typed["due_date"], typed["amount"],
+                db.now_iso(), db.now_iso(),
+            ),
+        )
+        imported += 1
+    db.audit(
+        conn, user, "collection.created", collection_id=collection_id,
+        new_value=f"created from template '{body.template}' ({imported} sample rows)",
+    )
+    conn.commit()
+    return {"ok": True, "collection_id": collection_id, "name": name, "imported": imported}
 
 
 @app.get("/")

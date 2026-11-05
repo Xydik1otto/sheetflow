@@ -53,6 +53,11 @@ pre { background:#0f172a; color:#e2e8f0; padding:10px; border-radius:6px; overfl
 
   <div class="card hidden" id="listCard">
     <h3>Колекції</h3>
+    <div style="margin-bottom:10px">
+      <select id="tplSelect"></select>
+      <button class="secondary" onclick="createFromTemplate()">Створити з шаблону</button>
+      <span class="muted">або імпортуйте файл нижче ↓</span>
+    </div>
     <table id="collTable"><thead><tr><th>#</th><th>Назва</th><th>Файл</th><th>Рядків</th><th>Створено</th><th></th></tr></thead><tbody></tbody></table>
   </div>
 
@@ -140,6 +145,21 @@ async function loadCollections() {
     tb.appendChild(tr);
   });
   if (cols.length) document.getElementById('listCard').classList.remove('hidden');
+  const tplSel = document.getElementById('tplSelect');
+  if (!tplSel.options.length) {
+    (await api('/api/templates')).forEach(t => {
+      const o = document.createElement('option'); o.value = t.key; o.textContent = t.name;
+      tplSel.appendChild(o);
+    });
+  }
+}
+
+async function createFromTemplate() {
+  const key = document.getElementById('tplSelect').value;
+  if (!key) return;
+  const d = await api('/api/collections/from-template', { method: 'POST', body: JSON.stringify({ template: key }) });
+  await loadCollections();
+  openColl(d.collection_id, d.name);
 }
 
 async function openColl(id, name) {
