@@ -4,6 +4,7 @@ Schema-first, stdlib sqlite3 — no ORM, keeps the MVP small and auditable.
 """
 import hashlib
 import hmac
+import json
 import os
 import sqlite3
 from datetime import datetime, timedelta
@@ -84,6 +85,17 @@ CREATE TABLE IF NOT EXISTS saved_filters (
     filter_json TEXT NOT NULL,
     created_by TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    UNIQUE(collection_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS custom_fields (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    label TEXT NOT NULL,
+    type TEXT NOT NULL,
+    options_json TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
     UNIQUE(collection_id, name)
 );
 
@@ -222,6 +234,70 @@ def delete_session(conn: sqlite3.Connection, token: str) -> bool:
 
 
 ROLES = ("admin", "worker")
+
+
+CUSTOM_FIELD_TYPES = ("text", "number", "date", "select")
+
+# Keyed by collection_id (per-request cache in main.py; keys are ints).
+_custom_fields_cache: dict[int, list] = {}
+
+
+def list_custom_fields(conn: sqlite3.Connection, collection_id: int) -> list:
+    """Custom (user-defined) fields of a collection, ordered by position."""
+    rows = conn.execute(
+        "SELECT id, name, label, type, options_json, position FROM custom_fields "
+        "WHERE collection_id = ? ORDER BY position, id",
+        (collection_id,),
+    ).fetchall()
+    return [
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "label": r["label"],
+            "type": r["type"],
+            "options": json.loads(r["options_json"]) if r["options_json"] else [],
+            "position": r["position"],
+        }
+        for r in rows
+    ]
+
+
+def get_custom_field(conn: sqlite3.Connection, collection_id: int, name: str):
+    return conn.execute(
+        "SELECT * FROM custom_fields WHERE collection_id = ? AND name = ?",
+        (collection_id, name),
+    ).fetchone()
+
+
+def add_custom_field(conn: sqlite3.Connection, collection_id: int, name: str,
+                     label: str, ftype: str, options: list[str] | None = None,
+                     position: int = 0) -> int:
+    cur = conn.execute(
+        "INSERT INTO custom_fields (collection_id, name, label, type, options_json, position) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (collection_id, name, label, ftype,
+         json.dumps(options, ensure_ascii=False) if options else None, position),
+    )
+    return cur.lastrowid
+
+
+def delete_custom_field(conn: sqlite3.Connection, field_id: int) -> None:
+    conn.execute("DELETE FROM custom_fields WHERE id = ?", (field_id,))
+
+
+def drop_custom_field_values(conn: sqlite3.Connection, collection_id: int, name: str) -> None:
+    """Remove the field's values from every row's extra_json of the collection."""
+    for row in conn.execute(
+        "SELECT id, extra_json FROM rows WHERE collection_id = ? AND extra_json IS NOT NULL",
+        (collection_id,),
+    ).fetchall():
+        values = json.loads(row["extra_json"])
+        if name in values:
+            values.pop(name)
+            conn.execute(
+                "UPDATE rows SET extra_json = ? WHERE id = ?",
+                (json.dumps(values, ensure_ascii=False) if values else None, row["id"]),
+            )
 
 
 def audit(conn: sqlite3.Connection, user: str, action: str, collection_id: int | None = None,

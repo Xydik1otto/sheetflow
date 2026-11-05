@@ -199,6 +199,31 @@ VALIDATORS.update({
 })
 
 
+# ------------------------------------------------------- custom field types
+
+def coerce_custom_value(ftype: str, v, options: list[str] | None = None) -> tuple:
+    """Coerce a value for a user-defined field of type text/number/date/select.
+
+    Returns (value, error_message) like the entity validators. An empty value
+    is always valid (None) — custom fields are optional per row.
+    """
+    if ftype == "text":
+        return _coerce_text(v)
+    if ftype == "number":
+        return _coerce_float(v)
+    if ftype == "date":
+        return _coerce_date(v)
+    if ftype == "select":
+        if _is_blank(v):
+            return None, None
+        s = str(v).strip()
+        opts = options or []
+        if s in opts:
+            return s, None
+        return None, f"value must be one of: {', '.join(opts)}" if opts else "select field has no options"
+    return None, f"unknown field type: {ftype!r}"
+
+
 @dataclass
 class SheetParse:
     columns: list[str]

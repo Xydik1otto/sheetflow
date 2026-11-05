@@ -13,6 +13,8 @@ Routes:
           GET  /api/collections/{id}/audit    — admin only
           GET  /api/collections/{id}/export.csv
   Calc    GET/PUT /api/collections/{id}/formulas   — calculated columns (admin writes)
+  Fields  GET/POST /api/collections/{id}/fields    — custom fields text/number/date/select
+          DELETE /api/collections/{id}/fields/{fid}
   Tmpl    GET  /api/templates
           POST /api/collections/from-template      — admin
   Remind  POST /api/reminders/run, GET /api/reminders/outbox, POST /api/reminders/flush
@@ -255,11 +257,16 @@ def list_rows(cid: int, status: str | None = None, assignee: str | None = None,
         needle = q.casefold()
         rows = [r for r in rows
                 if needle in (r["item"] or "").casefold()
-                or needle in (r["assignee"] or "").casefold()]
+                or needle in (r["assignee"] or "").casefold()
+                or needle in " ".join(
+                    str(v) for v in (json.loads(r["extra_json"]).values() if r["extra_json"] else [])
+                ).casefold()]
     today = date.today().isoformat()
     out = []
     for r in rows:
         d = dict(r)
+        if r["extra_json"]:
+            d.update(json.loads(r["extra_json"]))
         d["overdue"] = bool(r["due_date"] and r["due_date"] < today and r["status"] != "done")
         if formulas:
             d.update(calc.evaluate_row(formulas, {f: d.get(f) for f in importer.ENTITY_FIELDS}))
@@ -280,28 +287,52 @@ EDITABLE = {"item", "quantity", "status", "assignee", "due_date", "amount"}
 
 
 def _apply_row_update(conn, row_id: int, fields: dict, user: str, commit: bool = True) -> dict:
-    """Validate and apply field changes to one row; one audit event per changed field."""
-    unknown = set(fields) - EDITABLE
-    if unknown:
-        raise HTTPException(422, f"Fields not editable: {', '.join(sorted(unknown))}")
+    """Validate and apply field changes to one row; one audit event per changed field.
+
+    Entity fields live in dedicated columns; custom (user-defined) fields are
+    stored as a JSON dict in rows.extra_json and validated by field type.
+    """
     row = conn.execute("SELECT * FROM rows WHERE id = ?", (row_id,)).fetchone()
     if row is None:
         raise HTTPException(404, "Row not found")
+    custom = {f["name"]: f for f in db.list_custom_fields(conn, row["collection_id"])}
+    unknown = set(fields) - EDITABLE - set(custom)
+    if unknown:
+        raise HTTPException(422, f"Fields not editable: {', '.join(sorted(unknown))}")
     changes: list[tuple[str, object, object]] = []
     coerced_values: dict[str, object] = {}
     for field, value in fields.items():
-        coerced, err = importer.VALIDATORS[field](value)
+        if field in custom:
+            f = custom[field]
+            coerced, err = importer.coerce_custom_value(f["type"], value, f["options"])
+        else:
+            coerced, err = importer.VALIDATORS[field](value)
         if err:
             raise HTTPException(422, f"Invalid value for {field}: {err}")
         if field == "status" and coerced is None:
             coerced = "new"
         coerced_values[field] = coerced
-        if coerced != row[field]:
-            changes.append((field, row[field], coerced))
-    for field, _old, coerced in changes:
+        if field not in custom:
+            if coerced != row[field]:
+                changes.append((field, row[field], coerced))
+        else:
+            old_extra = json.loads(row["extra_json"]) if row["extra_json"] else {}
+            if coerced != old_extra.get(field):
+                changes.append((field, old_extra.get(field), coerced))
+    entity_changes = [c for c in changes if c[0] not in custom]
+    custom_changes = [c for c in changes if c[0] in custom]
+    for field, _old, coerced in entity_changes:
         conn.execute(
             f"UPDATE rows SET {field} = ?, updated_at = ? WHERE id = ?",
             (coerced, db.now_iso(), row_id),
+        )
+    if custom_changes:
+        extra = json.loads(row["extra_json"]) if row["extra_json"] else {}
+        for field, _old, coerced in custom_changes:
+            extra[field] = coerced
+        conn.execute(
+            "UPDATE rows SET extra_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(extra, ensure_ascii=False), db.now_iso(), row_id),
         )
     for field, old, coerced in changes:
         db.audit(
@@ -354,7 +385,17 @@ def bulk_update(body: BulkIn, conn=Depends(db.db), user: str = Depends(current_u
         raise HTTPException(422, "No rows selected")
     if len(body.ids) > BULK_LIMIT:
         raise HTTPException(422, f"Too many rows (max {BULK_LIMIT} per request)")
-    unknown = set(body.fields) - EDITABLE
+    # Unknown-field pre-check: entity fields + custom fields of any collection
+    # the selected rows belong to. Per-row type validation happens in
+    # _apply_row_update (a field valid in one collection is rejected elsewhere).
+    coll_ids = {r["collection_id"] for r in conn.execute(
+        f"SELECT DISTINCT collection_id FROM rows WHERE id IN ({','.join('?' * len(body.ids))})",
+        body.ids,
+    )}
+    custom_names: set[str] = set()
+    for c in coll_ids:
+        custom_names |= {f["name"] for f in db.list_custom_fields(conn, c)}
+    unknown = set(body.fields) - EDITABLE - custom_names
     if unknown:
         raise HTTPException(422, f"Fields not editable: {', '.join(sorted(unknown))}")
     updated, failed = [], []
@@ -465,6 +506,71 @@ def delete_filter(fid: int, conn=Depends(db.db), info: dict = Depends(current_us
     conn.execute("DELETE FROM saved_filters WHERE id = ?", (fid,))
     db.audit(conn, info["username"], "filter.deleted", collection_id=row["collection_id"],
              old_value=row["name"])
+    conn.commit()
+    return {"ok": True}
+
+
+# ------------------------------------------------------- custom fields
+
+
+class CustomFieldIn(BaseModel):
+    name: str
+    label: str
+    type: str  # 'text' | 'number' | 'date' | 'select'
+    options: list[str] = []  # select only
+
+
+@app.get("/api/collections/{cid}/fields")
+def get_fields(cid: int, conn=Depends(db.db), user: str = Depends(current_user)):
+    if conn.execute("SELECT 1 FROM collections WHERE id = ?", (cid,)).fetchone() is None:
+        raise HTTPException(404, "Collection not found")
+    return db.list_custom_fields(conn, cid)
+
+
+@app.post("/api/collections/{cid}/fields")
+def add_field(cid: int, body: CustomFieldIn, conn=Depends(db.db), user: str = Depends(require_admin)):
+    """Add a user-defined column (text/number/date/select) to a collection."""
+    if conn.execute("SELECT 1 FROM collections WHERE id = ?", (cid,)).fetchone() is None:
+        raise HTTPException(404, "Collection not found")
+    name = body.name.strip()
+    if not calc._IDENT.match(name):
+        raise HTTPException(422, f"Invalid field name: {name!r} (use letters, digits, _)")
+    if name in importer.ENTITY_FIELDS:
+        raise HTTPException(422, f"Field name {name!r} is reserved")
+    coll = conn.execute("SELECT calc_json FROM collections WHERE id = ?", (cid,)).fetchone()
+    if name in calc.calc_from_json(coll["calc_json"]):
+        raise HTTPException(409, f"Field name {name!r} collides with a calculated column")
+    if body.type not in db.CUSTOM_FIELD_TYPES:
+        raise HTTPException(422, f"Unknown field type {body.type!r}; "
+                                 f"available: {', '.join(db.CUSTOM_FIELD_TYPES)}")
+    options = [o.strip() for o in body.options if o.strip()]
+    if body.type == "select" and not options:
+        raise HTTPException(422, "Select field requires a non-empty options list")
+    if body.type != "select" and options:
+        raise HTTPException(422, "Only select fields take options")
+    if db.get_custom_field(conn, cid, name) is not None:
+        raise HTTPException(409, f"Field {name!r} already exists in this collection")
+    position = conn.execute(
+        "SELECT COALESCE(MAX(position), -1) + 1 FROM custom_fields WHERE collection_id = ?", (cid,)
+    ).fetchone()[0]
+    fid = db.add_custom_field(conn, cid, name, body.label.strip() or name, body.type, options, position)
+    db.audit(conn, user, "field.created", collection_id=cid,
+             new_value=f"{name} ({body.type})" + (f" [{', '.join(options)}]" if options else ""))
+    conn.commit()
+    created = next(f for f in db.list_custom_fields(conn, cid) if f["id"] == fid)
+    return {"ok": True, **created}
+
+
+@app.delete("/api/collections/{cid}/fields/{fid}")
+def delete_field(cid: int, fid: int, conn=Depends(db.db), user: str = Depends(require_admin)):
+    row = conn.execute(
+        "SELECT id, name FROM custom_fields WHERE id = ? AND collection_id = ?", (fid, cid)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(404, "Field not found")
+    db.delete_custom_field(conn, fid)
+    db.drop_custom_field_values(conn, cid, row["name"])
+    db.audit(conn, user, "field.deleted", collection_id=cid, old_value=row["name"])
     conn.commit()
     return {"ok": True}
 

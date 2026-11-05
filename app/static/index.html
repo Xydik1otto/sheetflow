@@ -39,6 +39,11 @@ pre { background:#0f172a; color:#e2e8f0; padding:10px; border-radius:6px; overfl
 .kcard { background:#fff; border:1px solid var(--line); border-radius:6px; padding:8px; margin-bottom:8px; cursor:grab; font-size:13px; }
 .kcard.dragging { opacity:.4; }
 .kcard .muted { display:block; margin-top:4px; }
+details.fieldsbox { margin:10px 0; border:1px dashed var(--line); border-radius:6px; padding:6px 10px; }
+details.fieldsbox summary { cursor:pointer; font-weight:600; font-size:13px; }
+.chip { display:inline-flex; align-items:center; gap:4px; background:#eff6ff; border:1px solid var(--line); border-radius:12px; padding:2px 8px; font-size:12px; }
+.chip .mini { padding:0 6px; font-size:11px; background:var(--danger); }
+td select { min-width:90px; }
 </style>
 </head>
 <body>
@@ -102,7 +107,16 @@ pre { background:#0f172a; color:#e2e8f0; padding:10px; border-radius:6px; overfl
       <button onclick="bulkStatusApply()">Змінити статус</button>
       <button class="secondary" onclick="bulkDelete()">Видалити вибрані</button>
     </div>
-    <table id="rowsTable"><thead><tr><th><input type="checkbox" id="selAll" onchange="toggleAll(this.checked)"></th><th>Item</th><th>Qty</th><th>Статус</th><th>Виконавець</th><th>Дедлайн</th><th>Сума</th></tr></thead><tbody></tbody></table>
+    <table id="rowsTable"><thead><tr></tr></thead><tbody></tbody></table>
+    <details class="fieldsbox" id="fieldsPanel">
+      <summary>Користувацькі поля</summary>
+      <div id="fieldsList" style="margin:6px 0"></div>
+      <input id="cfName" placeholder="ім'я латиницею, напр. priority" aria-label="Ім'я нового поля"> 
+      <input id="cfLabel" placeholder="Назва в таблиці" aria-label="Назва нового поля">
+      <select id="cfType" aria-label="Тип поля"><option>text</option><option>number</option><option>date</option><option>select</option></select>
+      <input id="cfOptions" placeholder="варіанти через кому (для select)" aria-label="Варіанти select-поля">
+      <button onclick="addField()">Додати поле</button>
+    </details>
     <h4>Журнал змін (audit)</h4>
     <div id="auditBox" class="muted"></div>
   </div>
@@ -204,8 +218,54 @@ async function openColl(id, name) {
   document.getElementById('bulkStatus').innerHTML = '<option value="">— новий статус —</option>' + ['new','in_progress','done','blocked'].map(s => `<option>${s}</option>`).join('');
   fOverdue.value = ''; fQ.value = '';
   await loadSavedFilters();
+  await loadFields();
   await loadRows();
   if (currentView === 'kanban') await loadKanban();
+}
+
+// ---- Custom (user-defined) fields: text/number/date/select per collection
+let customFields = [];
+const BASE_HEADERS = [['item', 'Item'], ['quantity', 'Qty'], ['status', 'Статус'],
+                      ['assignee', 'Виконавець'], ['due_date', 'Дедлайн'], ['amount', 'Сума']];
+
+async function loadFields() {
+  customFields = await api(`/api/collections/${currentColl}/fields`);
+  const box = document.getElementById('fieldsList');
+  box.innerHTML = customFields.length
+    ? customFields.map(f =>
+        `<span class="chip">${f.label} <i class="muted">(${f.type}${f.options.length ? ': ' + f.options.join('/') : ''})</i>` +
+        ` <button class="mini" aria-label="Видалити поле ${f.label}" onclick="delField(${f.id})">✖</button></span>`).join(' ')
+    : '<span class="muted">Ще немає користувацьких полів</span>';
+}
+
+async function addField() {
+  const name = document.getElementById('cfName').value.trim();
+  if (!name) return;
+  const type = document.getElementById('cfType').value;
+  const body = { name, label: document.getElementById('cfLabel').value.trim() || name, type };
+  if (type === 'select') body.options = document.getElementById('cfOptions').value.split(',').map(s => s.trim()).filter(Boolean);
+  try {
+    await api(`/api/collections/${currentColl}/fields`, { method: 'POST', body: JSON.stringify(body) });
+    document.getElementById('cfName').value = document.getElementById('cfLabel').value = document.getElementById('cfOptions').value = '';
+    await loadFields();
+    await loadRows();
+  } catch (e) { alert(e.message); }
+}
+
+async function delField(id) {
+  if (!confirm('Видалити поле разом з його значеннями у всіх рядках?')) return;
+  try {
+    await api(`/api/collections/${currentColl}/fields/${id}`, { method: 'DELETE' });
+    await loadFields();
+    await loadRows();
+  } catch (e) { alert(e.message); }
+}
+
+async function patchField(id, field, value) {
+  try {
+    await api('/api/rows/' + id, { method: 'PATCH', body: JSON.stringify({ field, value: value === '' ? null : value }) });
+    await loadRows();
+  } catch (e) { alert(e.message); await loadRows(); }
 }
 
 // ---- Saved (named) filters: sidebar of named views per collection
@@ -255,18 +315,30 @@ async function loadRows() {
   if (fOverdue.value) p.set('overdue', '1');
   if (fQ.value) p.set('q', fQ.value);
   const rows = await api(`/api/collections/${currentColl}/rows?` + p);
+  const thead = document.querySelector('#rowsTable thead tr');
+  thead.innerHTML = `<th><input type="checkbox" id="selAll" onchange="toggleAll(this.checked)" aria-label="Вибрати всі рядки"></th>` +
+    BASE_HEADERS.map(([f, t]) => `<th>${t}</th>`).join('') +
+    customFields.map(f => `<th>${f.label}</th>`).join('');
   const tb = document.querySelector('#rowsTable tbody'); tb.innerHTML = '';
   rows.forEach(r => {
     const tr = document.createElement('tr');
     if (r.overdue) tr.className = 'overdue';
     const dd = r.due_date ? (r.overdue ? `<span class="badge-overdue">${r.due_date} ⚠ прострочено</span>` : r.due_date) : '';
-    tr.innerHTML = `<td><input type="checkbox" class="rowSel" data-id="${r.id}" onchange="updateBulkBar()"></td>` +
+    const customCells = customFields.map(f => {
+      if (f.type === 'select') {
+        const opts = ['', ...f.options].map(o => `<option ${o === (r[f.name] ?? '') ? 'selected' : ''}>${o}</option>`).join('');
+        return `<td><select aria-label="${f.label}" onchange="patchField(${r.id},'${f.name}',this.value)">${opts}</select></td>`;
+      }
+      return `<td contenteditable="true" data-id="${r.id}" data-field="${f.name}">${r[f.name] ?? ''}</td>`;
+    }).join('');
+    tr.innerHTML = `<td><input type="checkbox" class="rowSel" data-id="${r.id}" onchange="updateBulkBar()" aria-label="Вибрати рядок ${r.id}"></td>` +
       `<td contenteditable="true" data-id="${r.id}" data-field="item">${r.item ?? ''}</td>` +
       `<td contenteditable="true" data-id="${r.id}" data-field="quantity">${r.quantity ?? ''}</td>` +
-      `<td><select onchange="setStatus(${r.id}, this.value)">${['','new','in_progress','done','blocked'].map(s => `<option ${s === r.status ? 'selected' : ''}>${s}</option>`).join('')}</select></td>` +
+      `<td><select aria-label="Статус" onchange="setStatus(${r.id}, this.value)">${['','new','in_progress','done','blocked'].map(s => `<option ${s === r.status ? 'selected' : ''}>${s}</option>`).join('')}</select></td>` +
       `<td contenteditable="true" data-id="${r.id}" data-field="assignee">${r.assignee ?? ''}</td>` +
       `<td contenteditable="true" data-id="${r.id}" data-field="due_date">${r.due_date ?? ''}</td>` +
-      `<td contenteditable="true" data-id="${r.id}" data-field="amount">${r.amount ?? ''}</td>`;
+      `<td contenteditable="true" data-id="${r.id}" data-field="amount">${r.amount ?? ''}</td>` +
+      customCells;
     tb.appendChild(tr);
   });
   const audit = await api(`/api/collections/${currentColl}/audit`);
